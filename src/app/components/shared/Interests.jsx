@@ -1,508 +1,370 @@
 'use client';
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import BASE_URL from '@/utils/api';
 import {
+  Alert,
+  Autocomplete,
   Box,
-  Paper,
-  Stack,
-  Typography,
   Button,
-  TextField,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  IconButton,
   InputAdornment,
+  Paper,
+  Snackbar,
+  Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  TablePagination,
-  IconButton,
-  Snackbar,
-  Alert,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
-import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/Delete';
-import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
+import SearchIcon from '@mui/icons-material/Search';
+import CheckIcon from '@mui/icons-material/Check';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import EditIcon from '@mui/icons-material/Edit';
+import MergeIcon from '@mui/icons-material/CallMerge';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { CustomizerContext } from '@/app/context/customizerContext';
 
-const Interest = () => {
-  const [interests, setInterests] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
+const TABS = [
+  { value: 'APPROVED', label: 'Approved', hint: 'Shown to everyone in the app, in this order.' },
+  { value: 'PENDING', label: 'Suggestions', hint: 'Words people typed in or used as #hashtags. Only you see them until you approve.' },
+  { value: 'HIDDEN', label: 'Hidden', hint: 'Never shown. Posts and people that used them keep working.' },
+];
+
+const SOURCE_LABEL = { ADMIN: 'Admin', USER: 'Typed by a user', HASHTAG: '#hashtag' };
+
+const usageText = (u) =>
+  [u.users && `${u.users} people`, u.posts && `${u.posts} posts`, u.blogs && `${u.blogs} blogs`, u.saved && `${u.saved} saves`]
+    .filter(Boolean)
+    .join(' · ') || 'Not used';
+
+const isUnused = (u) => !(u.users || u.posts || u.blogs || u.saved);
+
+const Interests = () => {
   const [token, setToken] = useState('');
+  const [tab, setTab] = useState('APPROVED');
+  const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [approved, setApproved] = useState([]);
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [feedback, setFeedback] = useState({ open: false, message: '', success: true });
 
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [formValue, setFormValue] = useState('');
-  const [formError, setFormError] = useState('');
-  const [selectedInterest, setSelectedInterest] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(5);
-
-  const [feedback, setFeedback] = useState({
-    message: '',
-    success: true,
-    open: false,
-  });
+  const [nameDialog, setNameDialog] = useState(null); // { mode: 'add' | 'rename', interest? }
+  const [nameValue, setNameValue] = useState('');
+  const [mergeFrom, setMergeFrom] = useState(null);
+  const [mergeInto, setMergeInto] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const { activeMode } = useContext(CustomizerContext);
   const isDark = activeMode === 'dark';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb';
+
+  const notify = (message, success = true) => setFeedback({ open: true, message, success });
+  const auth = useMemo(() => ({ headers: { 'x-access-token': token } }), [token]);
+  const errorText = (e, fallback) => e?.response?.data?.message || fallback;
 
   useEffect(() => {
     try {
-      const storedUser =
-        typeof window !== 'undefined'
-          ? JSON.parse(sessionStorage.getItem('user') || 'null')
-          : null;
-
-      setToken(storedUser?.data?.adminToken || '');
-    } catch (error) {
-      console.error('Session parse error:', error);
+      const stored = JSON.parse(sessionStorage.getItem('user') || 'null');
+      setToken(stored?.data?.adminToken || '');
+    } catch {
+      setToken('');
     }
   }, []);
 
-  useEffect(() => {
-    if (token) {
-      fetchInterests();
-    }
-  }, [token]);
-
-  const fetchInterests = async () => {
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
     try {
-      setLoading(true);
-      const res = await axios.get(`${BASE_URL}/admin/interest/getUserInterest`, {
-        headers: { 'x-access-token': token },
-      });
-
-      if (res.data.success) {
-        setInterests(res.data.data || []);
-      }
-    } catch (err) {
-      console.error('Fetch error:', err);
-      setFeedback({
-        message: 'Failed to fetch interests',
-        success: false,
-        open: true,
-      });
+      const [current, all] = await Promise.all([
+        axios.get(`${BASE_URL}/admin/interest/all`, { ...auth, params: { status: tab } }),
+        axios.get(`${BASE_URL}/admin/interest/all`, { ...auth, params: { status: 'APPROVED' } }),
+      ]);
+      setRows(current.data.data.interests);
+      setCounts(current.data.data.counts || {});
+      setApproved(all.data.data.interests);
+    } catch (e) {
+      notify(errorText(e, 'Could not load interests'), false);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, tab, auth]);
 
-  const validateInterest = (value) => {
-    const trimmed = value.trim();
+  useEffect(() => {
+    load();
+  }, [load]);
 
-    if (!trimmed) {
-      return 'Interest name is required';
-    }
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? rows.filter((r) => r.name.includes(q)) : rows;
+  }, [rows, search]);
 
-    if (trimmed.length < 2) {
-      return 'Interest name must be at least 2 characters';
-    }
-
-    if (trimmed.length > 50) {
-      return 'Interest name must be under 50 characters';
-    }
-
-    const alreadyExists = interests.some((item) => {
-      const sameName = item.name?.trim().toLowerCase() === trimmed.toLowerCase();
-
-      if (selectedInterest?.id) {
-        return sameName && item.id !== selectedInterest.id;
-      }
-
-      return sameName;
-    });
-
-    if (alreadyExists) {
-      return 'This interest already exists';
-    }
-
-    return '';
-  };
-
-  const openAddDialog = () => {
-    setSelectedInterest(null);
-    setFormValue('');
-    setFormError('');
-    setDialogOpen(true);
-  };
-
-  const openEditDialog = (interest) => {
-    setSelectedInterest(interest);
-    setFormValue(interest.name || '');
-    setFormError('');
-    setDialogOpen(true);
-  };
-
-  const closeDialog = () => {
-    setDialogOpen(false);
-    setSelectedInterest(null);
-    setFormValue('');
-    setFormError('');
-    setSubmitting(false);
-  };
-
-  const handleFormChange = (e) => {
-    const value = e.target.value;
-    setFormValue(value);
-
-    if (formError) {
-      setFormError(validateInterest(value));
-    }
-  };
-
-  const handleBlurValidation = () => {
-    setFormError(validateInterest(formValue));
-  };
-
-  const createInterest = async () => {
-    const trimmedValue = formValue.trim();
-    const error = validateInterest(trimmedValue);
-
-    if (error) {
-      setFormError(error);
-      return;
-    }
-
+  const run = async (id, request, success) => {
+    setBusyId(id);
     try {
-      setSubmitting(true);
-
-      await axios.post(
-        `${BASE_URL}/admin/interest/createUserInterest`,
-        { userInterest: trimmedValue },
-        { headers: { 'x-access-token': token } }
-      );
-
-      closeDialog();
-      fetchInterests();
-      setFeedback({
-        message: 'Interest created successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (err) {
-      console.error('Create error:', err);
-      setFeedback({
-        message: err?.response?.data?.message || 'Failed to create interest',
-        success: false,
-        open: true,
-      });
+      await request();
+      notify(success);
+      await load();
+    } catch (e) {
+      notify(errorText(e, 'Something went wrong'), false);
     } finally {
-      setSubmitting(false);
+      setBusyId(null);
     }
   };
 
-  const updateInterest = async () => {
-    const trimmedValue = formValue.trim();
-    const error = validateInterest(trimmedValue);
+  const setStatus = (interest, status) =>
+    run(
+      interest.id,
+      () => axios.patch(`${BASE_URL}/admin/interest/${interest.id}`, { status }, auth),
+      status === 'APPROVED' ? `"${interest.name}" is now shown in the app` : status === 'HIDDEN' ? `"${interest.name}" hidden` : 'Moved back to suggestions'
+    );
 
-    if (error) {
-      setFormError(error);
-      return;
-    }
-
-    if (!selectedInterest?.id) return;
-
-    try {
-      setSubmitting(true);
-
-      await axios.put(
-        `${BASE_URL}/admin/interest/updateUserInterest/${selectedInterest.id}`,
-        { userInterest: trimmedValue },
-        { headers: { 'x-access-token': token } }
-      );
-
-      closeDialog();
-      fetchInterests();
-      setFeedback({
-        message: 'Interest updated successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (err) {
-      console.error('Update error:', err);
-      setFeedback({
-        message: err?.response?.data?.message || 'Failed to update interest',
-        success: false,
-        open: true,
-      });
-    } finally {
-      setSubmitting(false);
-    }
+  const move = (index, delta) => {
+    const ids = shown.map((r) => r.id);
+    const to = index + delta;
+    if (to < 0 || to >= ids.length) return;
+    [ids[index], ids[to]] = [ids[to], ids[index]];
+    run(shown[index].id, () => axios.post(`${BASE_URL}/admin/interest/reorder`, { ids }, auth), 'Order saved');
   };
 
-  const deleteInterest = async (id) => {
-    if (!confirm('Are you sure you want to delete this interest?')) return;
-
-    try {
-      await axios.delete(`${BASE_URL}/admin/interest/deleteUserInterest/${id}`, {
-        headers: { 'x-access-token': token },
-      });
-
-      fetchInterests();
-      setFeedback({
-        message: 'Interest deleted successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (err) {
-      console.error('Delete error:', err);
-      setFeedback({
-        message: err?.response?.data?.message || 'Failed to delete interest',
-        success: false,
-        open: true,
-      });
-    }
-  };
-
-  const handleSubmit = () => {
-    if (selectedInterest) {
-      updateInterest();
+  const saveName = async () => {
+    const name = nameValue.trim();
+    if (!name) return;
+    const dialog = nameDialog;
+    setNameDialog(null);
+    if (dialog.mode === 'add') {
+      await run('new', () => axios.post(`${BASE_URL}/admin/interest/createUserInterest`, { userInterest: name }, auth), `"${name.toLowerCase()}" added`);
     } else {
-      createInterest();
+      await run(dialog.interest.id, () => axios.patch(`${BASE_URL}/admin/interest/${dialog.interest.id}`, { name }, auth), 'Renamed');
     }
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSubmit();
-    }
+  const doMerge = async () => {
+    const from = mergeFrom;
+    const into = mergeInto;
+    setMergeFrom(null);
+    setMergeInto(null);
+    await run(from.id, () => axios.post(`${BASE_URL}/admin/interest/${from.id}/merge`, { targetId: into.id }, auth), `"${from.name}" merged into "${into.name}"`);
   };
 
-  const handleChangePage = (_, newPage) => {
-    setPage(newPage);
+  const doDelete = async () => {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    await run(target.id, () => axios.delete(`${BASE_URL}/admin/interest/deleteUserInterest/${target.id}`, auth), `"${target.name}" deleted`);
   };
 
-  const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  };
-
-  const filteredInterests = interests.filter((item) =>
-    item.name?.toLowerCase().includes(searchTerm.toLowerCase())
+  const action = (title, icon, onClick, color = 'default', disabled = false) => (
+    <Tooltip title={title}>
+      <span>
+        <IconButton size="small" color={color} onClick={onClick} disabled={disabled}>
+          {icon}
+        </IconButton>
+      </span>
+    </Tooltip>
   );
 
-  const paginatedInterests = filteredInterests.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  );
+  const currentTab = TABS.find((t) => t.value === tab);
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 900, mx: 'auto' }}>
+    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1150, mx: 'auto' }}>
       <Paper
         sx={{
           p: { xs: 2, md: 3 },
           borderRadius: 3,
           border: '1px solid',
-          borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
+          borderColor: border,
           backgroundColor: isDark ? '#1e1e2f' : '#fff',
-          color: isDark ? '#fff' : '#111827',
           boxShadow: isDark ? 'none' : '0 10px 30px rgba(0,0,0,0.06)',
         }}
       >
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          spacing={2}
-          sx={{ mb: 3 }}
-        >
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2} sx={{ mb: 2 }}>
           <Box>
-            <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-              User Interests
-            </Typography>
-            <Typography variant="body2" sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}>
-              Manage user interests here.
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>Interests</Typography>
+            <Typography variant="body2" color="text.secondary">
+              What people can follow and post about. Only approved interests appear in the app.
             </Typography>
           </Box>
-
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={openAddDialog}
-            sx={{
-              textTransform: 'none',
-              borderRadius: 2,
-              px: 2,
-              py: 1,
-              boxShadow: 'none',
+            onClick={() => {
+              setNameValue('');
+              setNameDialog({ mode: 'add' });
             }}
+            sx={{ textTransform: 'none', borderRadius: 2, boxShadow: 'none' }}
           >
-            Add Interest
+            Add interest
           </Button>
         </Stack>
 
-        <Box sx={{ mb: 2 }}>
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="Search interest..."
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setPage(0);
-            }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            }}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 2,
-                backgroundColor: isDark ? '#25253a' : '#fafafa',
-              },
-            }}
-          />
-        </Box>
+        {(counts.PENDING || 0) > 0 && tab !== 'PENDING' && (
+          <Alert
+            severity="info"
+            sx={{ mb: 2 }}
+            action={<Button color="inherit" size="small" onClick={() => setTab('PENDING')}>Review</Button>}
+          >
+            {counts.PENDING} {counts.PENDING === 1 ? 'suggestion is' : 'suggestions are'} waiting for review.
+          </Alert>
+        )}
 
-        <TableContainer
-          sx={{
-            border: '1px solid',
-            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-            borderRadius: 2,
-            overflow: 'hidden',
-          }}
-        >
-          <Table>
+        <Tabs value={tab} onChange={(_, v) => { setTab(v); setSearch(''); }} sx={{ borderBottom: 1, borderColor: 'divider', mb: 1 }}>
+          {TABS.map((t) => (
+            <Tab key={t.value} value={t.value} label={`${t.label} (${counts[t.value] || 0})`} sx={{ textTransform: 'none', fontWeight: 600 }} />
+          ))}
+        </Tabs>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>{currentTab.hint}</Typography>
+
+        <TextField
+          fullWidth
+          size="small"
+          placeholder="Search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          sx={{ mb: 2 }}
+          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+        />
+
+        <TableContainer sx={{ border: '1px solid', borderColor: border, borderRadius: 2 }}>
+          <Table size="small">
             <TableHead>
               <TableRow sx={{ backgroundColor: isDark ? '#25253a' : '#f8fafc' }}>
-                <TableCell sx={{ fontWeight: 700, width: 90 }}>S.No</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Name</TableCell>
-                <TableCell sx={{ fontWeight: 700 }} align="right">
-                  Actions
-                </TableCell>
+                {tab === 'APPROVED' && <TableCell sx={{ fontWeight: 700, width: 90 }}>Order</TableCell>}
+                <TableCell sx={{ fontWeight: 700 }}>Interest</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Used by</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>From</TableCell>
+                <TableCell sx={{ fontWeight: 700 }} align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
-
             <TableBody>
-              {paginatedInterests.length > 0 ? (
-                paginatedInterests.map((item, index) => (
-                  <TableRow key={item.id} hover>
-                    <TableCell>{page * rowsPerPage + index + 1}</TableCell>
-                    <TableCell>{item.name}</TableCell>
-                    <TableCell align="right">
-                      <IconButton
-                        onClick={() => openEditDialog(item)}
-                        color="primary"
-                        size="small"
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => deleteInterest(item.id)}
-                        color="error"
-                        size="small"
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
+              {loading && rows.length === 0 ? (
+                <TableRow><TableCell colSpan={5} align="center" sx={{ py: 5 }}><CircularProgress size={26} /></TableCell></TableRow>
+              ) : shown.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} align="center" sx={{ py: 5, color: 'text.secondary' }}>
+                    {tab === 'PENDING' ? 'No suggestions waiting. 🎉' : 'Nothing here.'}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                shown.map((interest, index) => (
+                  <TableRow key={interest.id} hover sx={{ opacity: busyId === interest.id ? 0.5 : 1 }}>
+                    {tab === 'APPROVED' && (
+                      <TableCell>
+                        {action('Move up', <ArrowUpwardIcon fontSize="small" />, () => move(index, -1), 'default', index === 0 || !!search)}
+                        {action('Move down', <ArrowDownwardIcon fontSize="small" />, () => move(index, 1), 'default', index === shown.length - 1 || !!search)}
+                      </TableCell>
+                    )}
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{interest.name}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color={isUnused(interest.usage) ? 'text.secondary' : 'text.primary'}>
+                        {usageText(interest.usage)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Chip size="small" variant="outlined" label={SOURCE_LABEL[interest.source] || interest.source} />
+                    </TableCell>
+                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                      {interest.status !== 'APPROVED' && action('Approve: show in the app', <CheckIcon fontSize="small" />, () => setStatus(interest, 'APPROVED'), 'success')}
+                      {interest.status === 'HIDDEN' && action('Back to suggestions', <VisibilityIcon fontSize="small" />, () => setStatus(interest, 'PENDING'))}
+                      {interest.status !== 'HIDDEN' && action('Hide', <VisibilityOffIcon fontSize="small" />, () => setStatus(interest, 'HIDDEN'), 'warning')}
+                      {action('Rename', <EditIcon fontSize="small" />, () => { setNameValue(interest.name); setNameDialog({ mode: 'rename', interest }); })}
+                      {action('Merge into another interest', <MergeIcon fontSize="small" />, () => { setMergeFrom(interest); setMergeInto(null); }, 'primary')}
+                      {action(
+                        isUnused(interest.usage) ? 'Delete' : 'In use: hide or merge instead',
+                        <DeleteIcon fontSize="small" />,
+                        () => setDeleteTarget(interest),
+                        'error',
+                        !isUnused(interest.usage)
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={3} align="center" sx={{ py: 5 }}>
-                    <Typography
-                      variant="body2"
-                      sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}
-                    >
-                      {loading ? 'Loading interests...' : 'No interests found.'}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
               )}
             </TableBody>
           </Table>
-
-          <TablePagination
-            component="div"
-            count={filteredInterests.length}
-            page={page}
-            onPageChange={handleChangePage}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={handleChangeRowsPerPage}
-            rowsPerPageOptions={[5, 10, 20, 50]}
-            sx={{
-              borderTop: '1px solid',
-              borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-              '& .MuiTablePagination-toolbar': {
-                px: 2,
-              },
-            }}
-          />
         </TableContainer>
       </Paper>
 
-      <Dialog open={dialogOpen} onClose={closeDialog} fullWidth maxWidth="xs">
-        <DialogTitle sx={{ fontWeight: 700 }}>
-          {selectedInterest ? 'Edit Interest' : 'Add New Interest'}
-        </DialogTitle>
-
+      <Dialog open={!!nameDialog} onClose={() => setNameDialog(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{nameDialog?.mode === 'add' ? 'Add interest' : 'Rename interest'}</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             fullWidth
             size="small"
             margin="dense"
-            label="Interest Name"
-            value={formValue}
-            onChange={handleFormChange}
-            onBlur={handleBlurValidation}
-            onKeyDown={handleKeyDown}
-            error={!!formError}
-            helperText={formError || ' '}
-            inputProps={{ maxLength: 50 }}
+            label="Name"
+            value={nameValue}
+            onChange={(e) => setNameValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && saveName()}
+            helperText={nameDialog?.mode === 'add' ? 'Added as approved. If users suggested the same word, that suggestion is approved.' : 'Shown in lower case.'}
           />
         </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNameDialog(null)}>Cancel</Button>
+          <Button variant="contained" onClick={saveName} disabled={!nameValue.trim()}>Save</Button>
+        </DialogActions>
+      </Dialog>
 
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button
-            onClick={closeDialog}
-            color="inherit"
-            sx={{ textTransform: 'none' }}
-            disabled={submitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleSubmit}
-            disabled={submitting}
-            sx={{ textTransform: 'none', boxShadow: 'none' }}
-          >
-            {submitting
-              ? selectedInterest
-                ? 'Saving...'
-                : 'Adding...'
-              : selectedInterest
-              ? 'Save Changes'
-              : 'Add Interest'}
-          </Button>
+      <Dialog open={!!mergeFrom} onClose={() => setMergeFrom(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Merge "{mergeFrom?.name}"</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Everything using "{mergeFrom?.name}" ({mergeFrom ? usageText(mergeFrom.usage) : ''}) moves to the interest you pick, and "{mergeFrom?.name}" is removed. Use it for duplicates and misspellings.
+          </DialogContentText>
+          <Autocomplete
+            options={approved.filter((a) => a.id !== mergeFrom?.id)}
+            getOptionLabel={(o) => o.name}
+            value={mergeInto}
+            onChange={(_, v) => setMergeInto(v)}
+            renderInput={(params) => <TextField {...params} size="small" label="Merge into (approved interest)" />}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMergeFrom(null)}>Cancel</Button>
+          <Button variant="contained" onClick={doMerge} disabled={!mergeInto}>Merge</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Delete "{deleteTarget?.name}"?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>Nobody uses it. It will be removed for good.</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={doDelete}>Delete</Button>
         </DialogActions>
       </Dialog>
 
       <Snackbar
         open={feedback.open}
-        autoHideDuration={3000}
-        onClose={() => setFeedback({ ...feedback, open: false })}
+        autoHideDuration={3500}
+        onClose={() => setFeedback((f) => ({ ...f, open: false }))}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
-        <Alert
-          onClose={() => setFeedback({ ...feedback, open: false })}
-          severity={feedback.success ? 'success' : 'error'}
-          variant="filled"
-        >
+        <Alert severity={feedback.success ? 'success' : 'error'} variant="filled" onClose={() => setFeedback((f) => ({ ...f, open: false }))}>
           {feedback.message}
         </Alert>
       </Snackbar>
@@ -510,4 +372,4 @@ const Interest = () => {
   );
 };
 
-export default Interest;
+export default Interests;
