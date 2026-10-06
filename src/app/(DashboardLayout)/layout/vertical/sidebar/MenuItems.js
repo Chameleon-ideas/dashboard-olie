@@ -16,6 +16,7 @@ import {
   IconReportSearch,
   IconCategory,
     IconFileText, 
+    IconMessage,
   IconCalendarCheck,
   IconTag
 
@@ -93,6 +94,13 @@ const Menuitems = [
     title: 'Blogs',
     icon: IconFileText,
     href: '/blogs',
+  }
+  ,
+ {
+    id: uniqueId(),
+    title: 'Blog comments',
+    icon: IconMessage,
+    href: '/blog-comments',
   }
   ,
  {

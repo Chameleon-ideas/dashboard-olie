@@ -1,778 +1,317 @@
 'use client';
-import React, { useEffect, useState, useContext } from 'react';
-import axios from 'axios';
-import BASE_URL from '@/utils/api';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
+  Alert,
   Box,
-  Paper,
-  Stack,
-  Typography,
   Button,
-  TextField,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  IconButton,
   InputAdornment,
+  MenuItem,
+  Paper,
+  Snackbar,
+  Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
-  TableRow,
   TablePagination,
-  IconButton,
-  Snackbar,
-  Alert,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  MenuItem,
-  CircularProgress,
-  Chip,
+  TableRow,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
-import VisibilityIcon from '@mui/icons-material/Visibility';
+import SearchIcon from '@mui/icons-material/Search';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { CustomizerContext } from '@/app/context/customizerContext';
+import PublishIcon from '@mui/icons-material/Publish';
+import UnpublishedIcon from '@mui/icons-material/Unpublished';
+import ChatIcon from '@mui/icons-material/ChatBubbleOutline';
+import VisibilityIcon from '@mui/icons-material/VisibilityOutlined';
+import FavoriteIcon from '@mui/icons-material/FavoriteBorder';
+import BookmarkIcon from '@mui/icons-material/BookmarkBorder';
+import BlogEditorDialog from '@/app/components/blogs/BlogEditorDialog';
+import { deleteBlog, errorMessage, listBlogs, listTopics, readToken, setBlogStatus } from '@/app/components/blogs/blogApi';
+
+const STATUS_TABS = [
+  { value: '', label: 'All' },
+  { value: 'PUBLISHED', label: 'Published' },
+  { value: 'SCHEDULED', label: 'Scheduled' },
+  { value: 'DRAFT', label: 'Drafts' },
+];
+
+const statusChip = (blog) => {
+  if (blog.status === 'SCHEDULED') {
+    return <Chip size="small" color="info" label={`Scheduled · ${new Date(blog.publishedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`} />;
+  }
+  if (blog.status === 'PUBLISHED') {
+    return <Chip size="small" color="success" label={`Published · ${new Date(blog.publishedAt).toLocaleDateString([], { dateStyle: 'medium' })}`} />;
+  }
+  return <Chip size="small" variant="outlined" label="Draft" />;
+};
+
+const Stat = ({ icon, value, title }) => (
+  <Tooltip title={title}>
+    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: 'text.secondary', minWidth: 46 }}>
+      {icon}
+      <Typography variant="body2">{value}</Typography>
+    </Stack>
+  </Tooltip>
+);
 
 const Blogs = () => {
-  const [interests, setInterests] = useState([]);
-  const [blogs, setBlogs] = useState([]);
+  const router = useRouter();
   const [token, setToken] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-
-  const [searchTerm, setSearchTerm] = useState('');
+  const [topics, setTopics] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState('');
+  const [topicId, setTopicId] = useState('');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [loading, setLoading] = useState(true);
+  const [editor, setEditor] = useState(null); // { id } or { id: null }
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [feedback, setFeedback] = useState({ open: false, message: '', success: true });
 
-  const [formDialogOpen, setFormDialogOpen] = useState(false);
-  const [viewDialogOpen, setViewDialogOpen] = useState(false);
-  const [formMode, setFormMode] = useState('create');
-  const [currentBlog, setCurrentBlog] = useState(null);
-  const [viewBlog, setViewBlog] = useState(null);
+  const notify = (message, success = true) => setFeedback({ open: true, message, success });
 
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [selectedInterest, setSelectedInterest] = useState('');
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState('');
-
-  const [errors, setErrors] = useState({
-    title: '',
-    content: '',
-    selectedInterest: '',
-    image: '',
-  });
-
-  const [feedback, setFeedback] = useState({
-    message: '',
-    success: true,
-    open: false,
-  });
-
-  const { activeMode } = useContext(CustomizerContext);
-  const isDark = activeMode === 'dark';
+  useEffect(() => setToken(readToken()), []);
 
   useEffect(() => {
-    try {
-      const storedUser =
-        typeof window !== 'undefined'
-          ? JSON.parse(sessionStorage.getItem('user') || 'null')
-          : null;
-
-      setToken(storedUser?.data?.adminToken || '');
-    } catch (error) {
-      console.error('Session parse error:', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (token) {
-      fetchInterests();
-      fetchBlogs();
-    }
+    if (!token) return;
+    listTopics(token).then(setTopics).catch(() => setTopics([]));
   }, [token]);
 
-  const fetchInterests = async () => {
-    try {
-      const res = await axios.get(`${BASE_URL}/admin/interest/getUserInterest`, {
-        headers: { 'x-access-token': token },
-      });
+  // Search as you type, after a short pause.
+  useEffect(() => {
+    const timer = setTimeout(() => { setQuery(search.trim()); setPage(0); }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
 
-      if (res.data.success) {
-        setInterests(res.data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch interests:', error);
-      setFeedback({
-        message: 'Failed to fetch interests',
-        success: false,
-        open: true,
-      });
+  const load = useCallback(async () => {
+    if (!token) {
+      setLoading(false);
+      return;
     }
-  };
-
-  const fetchBlogs = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const res = await axios.get(`${BASE_URL}/admin/blog/getAllBlogs`, {
-        headers: { 'x-access-token': token },
+      const data = await listBlogs(token, {
+        page: page + 1,
+        limit: rowsPerPage,
+        ...(status ? { status } : {}),
+        ...(topicId ? { topicId } : {}),
+        ...(query ? { q: query } : {}),
       });
-
-      if (res.data.success) {
-        setBlogs(res.data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch blogs:', error);
-      setFeedback({
-        message: 'Failed to fetch blogs',
-        success: false,
-        open: true,
-      });
+      setRows(data.blogs);
+      setTotal(data.total);
+      setCounts(data.counts || {});
+    } catch (e) {
+      notify(errorMessage(e, 'Could not load posts'), false);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, page, rowsPerPage, status, topicId, query]);
 
-  const clearImagePreview = () => {
-    if (imagePreview && imagePreview.startsWith('blob:')) {
-      URL.revokeObjectURL(imagePreview);
-    }
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const resetForm = () => {
-    clearImagePreview();
-    setTitle('');
-    setContent('');
-    setSelectedInterest('');
-    setImageFile(null);
-    setImagePreview('');
-    setCurrentBlog(null);
-    setErrors({
-      title: '',
-      content: '',
-      selectedInterest: '',
-      image: '',
-    });
-  };
-
-  const openCreateDialog = () => {
-    resetForm();
-    setFormMode('create');
-    setFormDialogOpen(true);
-  };
-
-  const openEditDialog = (blog) => {
-    resetForm();
-    setFormMode('edit');
-    setCurrentBlog(blog);
-    setTitle(blog.title || '');
-    setContent(blog.content || '');
-    setImagePreview(blog.image || '');
-    setFormDialogOpen(true);
-  };
-
-  const closeFormDialog = () => {
-    setFormDialogOpen(false);
-    setSubmitting(false);
-    resetForm();
-  };
-
-  const openViewDialog = (blog) => {
-    setViewBlog(blog);
-    setViewDialogOpen(true);
-  };
-
-  const closeViewDialog = () => {
-    setViewDialogOpen(false);
-    setViewBlog(null);
-  };
-
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0];
-
-    if (!file) {
-      setImageFile(null);
-      if (formMode === 'create') {
-        clearImagePreview();
-        setImagePreview('');
-      }
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setErrors((prev) => ({ ...prev, image: 'Please select a valid image file' }));
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setErrors((prev) => ({ ...prev, image: 'Image must be under 5MB' }));
-      return;
-    }
-
-    clearImagePreview();
-    const previewUrl = URL.createObjectURL(file);
-
-    setImageFile(file);
-    setImagePreview(previewUrl);
-    setErrors((prev) => ({ ...prev, image: '' }));
-  };
-
-  const validateForm = () => {
-    const nextErrors = {
-      title: '',
-      content: '',
-      selectedInterest: '',
-      image: '',
-    };
-
-    if (!title.trim()) {
-      nextErrors.title = 'Title is required';
-    } else if (title.trim().length < 3) {
-      nextErrors.title = 'Title must be at least 3 characters';
-    }
-
-    if (!content.trim()) {
-      nextErrors.content = 'Content is required';
-    } else if (content.trim().length < 10) {
-      nextErrors.content = 'Content must be at least 10 characters';
-    }
-
-    if (formMode === 'create' && !selectedInterest) {
-      nextErrors.selectedInterest = 'Interest is required';
-    }
-
-    if (formMode === 'create' && !imageFile) {
-      nextErrors.image = 'Image is required';
-    }
-
-    setErrors(nextErrors);
-    return !Object.values(nextErrors).some(Boolean);
-  };
-
-  const handleCreateBlog = async (e) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-
-    const formData = new FormData();
-    formData.append('postTitle', title.trim());
-    formData.append('postContent', content.trim());
-    formData.append('image', imageFile);
-
+  const changeStatus = async (blog, next) => {
+    setBusyId(blog.id);
     try {
-      setSubmitting(true);
-
-      const res = await axios.post(
-        `${BASE_URL}/admin/blog/createBlog/${selectedInterest}`,
-        formData,
-        {
-          headers: {
-            'x-access-token': token,
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
-
-      if (res.data.success) {
-        closeFormDialog();
-        fetchBlogs();
-        setFeedback({
-          message: 'Blog created successfully!',
-          success: true,
-          open: true,
-        });
-      } else {
-        setFeedback({
-          message: 'Failed to create blog',
-          success: false,
-          open: true,
-        });
-      }
-    } catch (error) {
-      console.error('Create blog error:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to create blog',
-        success: false,
-        open: true,
-      });
+      await setBlogStatus(token, blog.id, next);
+      notify(next === 'PUBLISHED' ? `"${blog.title}" is live` : `"${blog.title}" moved to drafts`);
+      await load();
+    } catch (e) {
+      notify(errorMessage(e, 'Could not change the status'), false);
     } finally {
-      setSubmitting(false);
+      setBusyId(null);
     }
   };
 
-  const handleUpdateBlog = async (e) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-    if (!currentBlog?.id) return;
-
-    const formData = new FormData();
-    formData.append('postTitle', title.trim());
-    formData.append('postContent', content.trim());
-
-    if (imageFile) {
-      formData.append('image', imageFile);
-    }
-
+  const doDelete = async () => {
+    const blog = confirmDelete;
+    setConfirmDelete(null);
+    setBusyId(blog.id);
     try {
-      setSubmitting(true);
-
-      const res = await axios.put(
-        `${BASE_URL}/admin/blog/updateBlog/${currentBlog.id}`,
-        formData,
-        {
-          headers: {
-            'x-access-token': token,
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
-
-      if (res.data.success) {
-        closeFormDialog();
-        fetchBlogs();
-        setFeedback({
-          message: 'Blog updated successfully!',
-          success: true,
-          open: true,
-        });
-      } else {
-        setFeedback({
-          message: 'Failed to update blog',
-          success: false,
-          open: true,
-        });
-      }
-    } catch (error) {
-      console.error('Update blog error:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to update blog',
-        success: false,
-        open: true,
-      });
+      await deleteBlog(token, blog.id);
+      notify(`"${blog.title}" deleted`);
+      await load();
+    } catch (e) {
+      notify(errorMessage(e, 'Could not delete the post'), false);
     } finally {
-      setSubmitting(false);
+      setBusyId(null);
     }
   };
 
-  const handleDeleteBlog = async (blogId) => {
-    if (!confirm('Are you sure you want to delete this blog?')) return;
-
-    try {
-      const res = await axios.delete(`${BASE_URL}/admin/blog/deleteBlog/${blogId}`, {
-        headers: { 'x-access-token': token },
-      });
-
-      if (res.data.success) {
-        fetchBlogs();
-        setFeedback({
-          message: 'Blog deleted successfully!',
-          success: true,
-          open: true,
-        });
-      } else {
-        setFeedback({
-          message: 'Failed to delete blog',
-          success: false,
-          open: true,
-        });
-      }
-    } catch (error) {
-      console.error('Delete blog error:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to delete blog',
-        success: false,
-        open: true,
-      });
-    }
-  };
-
-  const filteredBlogs = blogs.filter((blog) => {
-    const keyword = searchTerm.toLowerCase();
-    return (
-      blog.title?.toLowerCase().includes(keyword) ||
-      blog.category?.name?.toLowerCase().includes(keyword)
-    );
-  });
-
-  const paginatedBlogs = filteredBlogs.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  );
-
-  const handleChangePage = (_, newPage) => {
-    setPage(newPage);
-  };
-
-  const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  };
+  const allCount = Object.values(counts).reduce((a, b) => a + b, 0);
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1100, mx: 'auto' }}>
-      <Paper
-        sx={{
-          p: { xs: 2, md: 3 },
-          borderRadius: 3,
-          border: '1px solid',
-          borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-          backgroundColor: isDark ? '#1e1e2f' : '#fff',
-          color: isDark ? '#fff' : '#111827',
-          boxShadow: isDark ? 'none' : '0 10px 30px rgba(0,0,0,0.06)',
-        }}
-      >
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          spacing={2}
-          sx={{ mb: 3 }}
-        >
+    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1250, mx: 'auto' }}>
+      <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 3, border: '1px solid', borderColor: 'divider', boxShadow: 'none' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2} sx={{ mb: 2 }}>
           <Box>
-            <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-              User Blogs
-            </Typography>
-            <Typography variant="body2" sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}>
-              Manage blogs, images, and linked interests.
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>Blogs</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Write, schedule and publish posts. Followers of a topic get a notification when a post goes live.
             </Typography>
           </Box>
-
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={openCreateDialog}
-            sx={{
-              textTransform: 'none',
-              borderRadius: 2,
-              px: 2,
-              py: 1,
-              boxShadow: 'none',
-            }}
-          >
-            Create Blog
-          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button variant="outlined" startIcon={<ChatIcon />} onClick={() => router.push('/blog-comments')} sx={{ textTransform: 'none' }}>
+              Comments
+            </Button>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setEditor({ id: null })} sx={{ textTransform: 'none', boxShadow: 'none' }}>
+              New post
+            </Button>
+          </Stack>
         </Stack>
 
-        <Box sx={{ mb: 2 }}>
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="Search by title or interest..."
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setPage(0);
-            }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            }}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 2,
-                backgroundColor: isDark ? '#25253a' : '#fafafa',
-              },
-            }}
-          />
-        </Box>
+        <Tabs value={status} onChange={(_, v) => { setStatus(v); setPage(0); }} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+          {STATUS_TABS.map((t) => (
+            <Tab key={t.value} value={t.value} label={`${t.label} (${t.value ? counts[t.value] || 0 : allCount})`} sx={{ textTransform: 'none', fontWeight: 600 }} />
+          ))}
+        </Tabs>
 
-        <TableContainer
-          sx={{
-            border: '1px solid',
-            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-            borderRadius: 2,
-            overflow: 'hidden',
-          }}
-        >
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+          <TextField
+            size="small"
+            placeholder="Search titles"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            sx={{ flex: 1 }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          />
+          <TextField select size="small" value={topicId} onChange={(e) => { setTopicId(e.target.value); setPage(0); }} sx={{ minWidth: 220 }} SelectProps={{ displayEmpty: true }}>
+            <MenuItem value="">All topics</MenuItem>
+            {topics.map((t) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+          </TextField>
+        </Stack>
+
+        <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
           <Table>
             <TableHead>
-              <TableRow sx={{ backgroundColor: isDark ? '#25253a' : '#f8fafc' }}>
-                <TableCell sx={{ fontWeight: 700, width: 80 }}>S.No</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Title</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 110 }}>Image</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Interest</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 120 }}>Status</TableCell>
-                <TableCell sx={{ fontWeight: 700 }} align="right">
-                  Actions
-                </TableCell>
+              <TableRow sx={{ bgcolor: 'action.hover' }}>
+                <TableCell sx={{ fontWeight: 700 }}>Post</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Engagement</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Updated</TableCell>
+                <TableCell sx={{ fontWeight: 700 }} align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
-
             <TableBody>
-              {paginatedBlogs.length > 0 ? (
-                paginatedBlogs.map((blog, index) => (
-                  <TableRow key={blog.id} hover>
-                    <TableCell>{page * rowsPerPage + index + 1}</TableCell>
-                    <TableCell>{blog.title}</TableCell>
+              {loading && rows.length === 0 ? (
+                <TableRow><TableCell colSpan={5} align="center" sx={{ py: 6 }}><CircularProgress size={28} /></TableCell></TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} align="center" sx={{ py: 6, color: 'text.secondary' }}>
+                    {query || topicId || status ? 'No posts match.' : 'No posts yet. Write the first one.'}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                rows.map((blog) => (
+                  <TableRow key={blog.id} hover sx={{ opacity: busyId === blog.id ? 0.5 : 1, cursor: 'pointer' }} onClick={() => setEditor({ id: blog.id })}>
                     <TableCell>
-                      {blog.image ? (
-                        <Box
-                          component="img"
-                          src={blog.image}
-                          alt={blog.title}
-                          sx={{
-                            width: 72,
-                            height: 48,
-                            objectFit: 'cover',
-                            borderRadius: 1.5,
-                            border: '1px solid',
-                            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                          }}
-                        />
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        {blog.image ? (
+                          <Box component="img" src={blog.image} alt="" sx={{ width: 72, height: 48, objectFit: 'cover', borderRadius: 1.5, flexShrink: 0 }} />
+                        ) : (
+                          <Box sx={{ width: 72, height: 48, borderRadius: 1.5, bgcolor: 'action.hover', flexShrink: 0 }} />
+                        )}
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>{blog.title}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {blog.category?.name || 'No topic'} · {blog.readMinutes} min read · {blog.admin?.name || 'Admin'}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                    </TableCell>
+                    <TableCell>{statusChip(blog)}</TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={1.5}>
+                        <Stat icon={<VisibilityIcon sx={{ fontSize: 16 }} />} value={blog.stats.readers} title={`${blog.stats.readers} readers (${blog.stats.views} views)`} />
+                        <Stat icon={<FavoriteIcon sx={{ fontSize: 16 }} />} value={blog.stats.likes} title="Likes" />
+                        <Stat icon={<ChatIcon sx={{ fontSize: 16 }} />} value={blog.stats.comments} title="Comments" />
+                        <Stat icon={<BookmarkIcon sx={{ fontSize: 16 }} />} value={blog.stats.saves} title="Saves" />
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="caption">{new Date(blog.updatedAt).toLocaleDateString([], { dateStyle: 'medium' })}</Typography>
+                    </TableCell>
+                    <TableCell align="right" onClick={(e) => e.stopPropagation()} sx={{ whiteSpace: 'nowrap' }}>
+                      <Tooltip title="Edit"><IconButton size="small" onClick={() => setEditor({ id: blog.id })}><EditIcon fontSize="small" /></IconButton></Tooltip>
+                      {blog.status === 'PUBLISHED' ? (
+                        <Tooltip title="Unpublish (back to drafts)"><IconButton size="small" color="warning" onClick={() => changeStatus(blog, 'DRAFT')}><UnpublishedIcon fontSize="small" /></IconButton></Tooltip>
                       ) : (
-                        '-'
+                        <Tooltip title="Publish now"><IconButton size="small" color="success" onClick={() => changeStatus(blog, 'PUBLISHED')}><PublishIcon fontSize="small" /></IconButton></Tooltip>
                       )}
-                    </TableCell>
-                    <TableCell>{blog.category?.name || '-'}</TableCell>
-                    <TableCell>
-                      <Chip size="small" label="Active" color="success" variant="outlined" />
-                    </TableCell>
-                    <TableCell align="right">
-                      <IconButton
-                        onClick={() => openViewDialog(blog)}
-                        color="primary"
-                        size="small"
-                      >
-                        <VisibilityIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => openEditDialog(blog)}
-                        color="secondary"
-                        size="small"
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => handleDeleteBlog(blog.id)}
-                        color="error"
-                        size="small"
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
+                      <Tooltip title="Comments"><IconButton size="small" onClick={() => router.push(`/blog-comments?blogId=${blog.id}`)}><ChatIcon fontSize="small" /></IconButton></Tooltip>
+                      <Tooltip title="Delete"><IconButton size="small" color="error" onClick={() => setConfirmDelete(blog)}><DeleteIcon fontSize="small" /></IconButton></Tooltip>
                     </TableCell>
                   </TableRow>
                 ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={6} align="center" sx={{ py: 5 }}>
-                    <Typography
-                      variant="body2"
-                      sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}
-                    >
-                      {loading ? 'Loading blogs...' : 'No blogs found.'}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
               )}
             </TableBody>
           </Table>
-
           <TablePagination
             component="div"
-            count={filteredBlogs.length}
+            count={total}
             page={page}
-            onPageChange={handleChangePage}
+            onPageChange={(_, p) => setPage(p)}
             rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={handleChangeRowsPerPage}
-            rowsPerPageOptions={[5, 10, 20, 50]}
-            sx={{
-              borderTop: '1px solid',
-              borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-              '& .MuiTablePagination-toolbar': {
-                px: 2,
-              },
-            }}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={[10, 20, 50]}
           />
         </TableContainer>
       </Paper>
 
-      <Dialog open={formDialogOpen} onClose={closeFormDialog} fullWidth maxWidth="sm">
-        <form onSubmit={formMode === 'create' ? handleCreateBlog : handleUpdateBlog}>
-          <DialogTitle sx={{ fontWeight: 700 }}>
-            {formMode === 'create' ? 'Create Blog' : 'Edit Blog'}
-          </DialogTitle>
+      <BlogEditorDialog
+        open={Boolean(editor)}
+        blogId={editor?.id || null}
+        topics={topics}
+        token={token}
+        onClose={() => setEditor(null)}
+        onSaved={(saved, status) => {
+          setEditor(null);
+          notify(status === 'PUBLISHED' ? 'Published' : status === 'SCHEDULED' ? 'Scheduled' : status === 'DRAFT' ? 'Saved as draft' : 'Saved');
+          load();
+        }}
+      />
 
-          <DialogContent>
-            <TextField
-              fullWidth
-              autoFocus
-              size="small"
-              label="Title"
-              margin="dense"
-              value={title}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                if (errors.title) setErrors((prev) => ({ ...prev, title: '' }));
-              }}
-              error={!!errors.title}
-              helperText={errors.title || ' '}
-            />
-
-            <TextField
-              fullWidth
-              size="small"
-              multiline
-              minRows={4}
-              label="Content"
-              margin="dense"
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value);
-                if (errors.content) setErrors((prev) => ({ ...prev, content: '' }));
-              }}
-              error={!!errors.content}
-              helperText={errors.content || ' '}
-            />
-
-            {formMode === 'create' ? (
-              <TextField
-                select
-                fullWidth
-                size="small"
-                label="Interest"
-                margin="dense"
-                value={selectedInterest}
-                onChange={(e) => {
-                  setSelectedInterest(e.target.value);
-                  if (errors.selectedInterest) {
-                    setErrors((prev) => ({ ...prev, selectedInterest: '' }));
-                  }
-                }}
-                error={!!errors.selectedInterest}
-                helperText={errors.selectedInterest || ' '}
-              >
-                <MenuItem value="">Select Interest</MenuItem>
-                {interests.map((interest) => (
-                  <MenuItem key={interest.id} value={interest.id}>
-                    {interest.name}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : (
-              <TextField
-                fullWidth
-                size="small"
-                label="Interest"
-                margin="dense"
-                value={currentBlog?.category?.name || ''}
-                disabled
-                helperText="Interest is read-only in edit mode"
-              />
-            )}
-
-            <Box sx={{ mt: 1 }}>
-              <Button variant="outlined" component="label" sx={{ textTransform: 'none' }}>
-                {formMode === 'create' ? 'Upload Image' : 'Change Image'}
-                <input hidden type="file" accept="image/*" onChange={handleImageChange} />
-              </Button>
-
-              {errors.image && (
-                <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-                  {errors.image}
-                </Typography>
-              )}
-
-              {imagePreview && (
-                <Box
-                  component="img"
-                  src={imagePreview}
-                  alt="Preview"
-                  sx={{
-                    mt: 2,
-                    width: '100%',
-                    maxHeight: 220,
-                    objectFit: 'cover',
-                    borderRadius: 2,
-                    border: '1px solid',
-                    borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                  }}
-                />
-              )}
-            </Box>
-          </DialogContent>
-
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button
-              onClick={closeFormDialog}
-              color="inherit"
-              disabled={submitting}
-              sx={{ textTransform: 'none' }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={submitting}
-              sx={{ textTransform: 'none', boxShadow: 'none', minWidth: 130 }}
-            >
-              {submitting ? (
-                <CircularProgress size={20} color="inherit" />
-              ) : formMode === 'create' ? (
-                'Create Blog'
-              ) : (
-                'Save Changes'
-              )}
-            </Button>
-          </DialogActions>
-        </form>
-      </Dialog>
-
-      <Dialog open={viewDialogOpen} onClose={closeViewDialog} fullWidth maxWidth="md">
-        <DialogTitle sx={{ fontWeight: 700 }}>{viewBlog?.title}</DialogTitle>
-
+      <Dialog open={Boolean(confirmDelete)} onClose={() => setConfirmDelete(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Delete this post?</DialogTitle>
         <DialogContent>
-          {viewBlog?.image && (
-            <Box
-              component="img"
-              src={viewBlog.image}
-              alt={viewBlog.title}
-              sx={{
-                width: '100%',
-                maxHeight: 320,
-                objectFit: 'cover',
-                borderRadius: 2,
-                mb: 2,
-              }}
-            />
-          )}
-
-          <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap' }}>
-            <Chip
-              size="small"
-              label={`Interest: ${viewBlog?.category?.name || '-'}`}
-              variant="outlined"
-            />
-            <Chip size="small" label="Active" color="success" variant="outlined" />
-          </Stack>
-
-          <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-            {viewBlog?.content}
-          </Typography>
+          <DialogContentText>
+            "{confirmDelete?.title}" will be removed for good
+            {confirmDelete && (confirmDelete.stats.comments || confirmDelete.stats.likes)
+              ? `, with its ${confirmDelete.stats.comments} comments and ${confirmDelete.stats.likes} likes`
+              : ''}
+            . To take it down for now, unpublish it instead.
+          </DialogContentText>
         </DialogContent>
-
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeViewDialog} sx={{ textTransform: 'none' }}>
-            Close
-          </Button>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>Keep</Button>
+          <Button color="error" variant="contained" onClick={doDelete}>Delete</Button>
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={feedback.open}
-        autoHideDuration={3000}
-        onClose={() => setFeedback({ ...feedback, open: false })}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert
-          onClose={() => setFeedback({ ...feedback, open: false })}
-          severity={feedback.success ? 'success' : 'error'}
-          variant="filled"
-        >
+      <Snackbar open={feedback.open} autoHideDuration={3500} onClose={() => setFeedback((f) => ({ ...f, open: false }))} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
+        <Alert severity={feedback.success ? 'success' : 'error'} variant="filled" onClose={() => setFeedback((f) => ({ ...f, open: false }))}>
           {feedback.message}
         </Alert>
       </Snackbar>
