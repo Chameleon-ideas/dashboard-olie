@@ -1,910 +1,314 @@
 'use client';
-import React, { useEffect, useState, useContext } from 'react';
-import axios from 'axios';
-import BASE_URL from '@/utils/api';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
-  Paper,
-  Stack,
-  Typography,
   Button,
-  TextField,
+  Chip,
+  CircularProgress,
+  IconButton,
   InputAdornment,
+  MenuItem,
+  Paper,
+  Snackbar,
+  Stack,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
-  TableRow,
   TablePagination,
-  IconButton,
-  Snackbar,
-  Alert,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  CircularProgress,
+  TableRow,
+  TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import AddIcon from '@mui/icons-material/Add';
-import VisibilityIcon from '@mui/icons-material/Visibility';
 import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/Delete';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import LocationOffIcon from '@mui/icons-material/LocationOff';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import { CustomizerContext } from '@/app/context/customizerContext';
+import { errorMessage, fetchEvents, saveEvent } from '@/app/components/events/eventApi';
+import { formatAtVenue } from '@/app/components/events/eventTime';
+import EventFormDialog from '@/app/components/events/EventFormDialog';
+import EventDetailDialog from '@/app/components/events/EventDetailDialog';
+import EventStatusChip from '@/app/components/events/EventStatusChip';
 
-const initialForm = {
-  eventName: '',
-  eventDescription: '',
-  eventDate: '',
-  eventTime: '',
-  eventAddress: '',
-  eventStates: '',
-  eventCity: '',
-  eventCountry: '',
+const STATUS_FILTERS = [
+  { value: 'ACTIVE', label: 'Upcoming & live' },
+  { value: 'ALL', label: 'All events' },
+  { value: 'PAST', label: 'Past' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+  { value: 'NO_PIN', label: 'Missing map pin' },
+];
+
+const matchesStatus = (event, filter) => {
+  switch (filter) {
+    case 'ACTIVE':
+      return event.status === 'UPCOMING' || event.status === 'LIVE';
+    case 'PAST':
+    case 'CANCELLED':
+      return event.status === filter;
+    case 'NO_PIN':
+      return !event.isOnline && !event.hasPin && event.status !== 'PAST';
+    default:
+      return true;
+  }
 };
+
+const whereLabel = (event) =>
+  event.isOnline ? 'Online' : [event.venueName, event.eventCity, event.eventCountry].filter(Boolean).join(', ') || event.eventAddress;
 
 const Events = () => {
   const [events, setEvents] = useState([]);
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ACTIVE');
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
 
-  const [formDialogOpen, setFormDialogOpen] = useState(false);
-  const [viewDialogOpen, setViewDialogOpen] = useState(false);
-  const [formMode, setFormMode] = useState('create');
-  const [currentEvent, setCurrentEvent] = useState(null);
-  const [viewEvent, setViewEvent] = useState(null);
-
-  const [formData, setFormData] = useState(initialForm);
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState('');
-
-  const [errors, setErrors] = useState({
-    eventName: '',
-    eventDescription: '',
-    eventDate: '',
-    eventTime: '',
-    eventAddress: '',
-    eventStates: '',
-    eventCity: '',
-    eventCountry: '',
-    image: '',
-  });
-
-  const [feedback, setFeedback] = useState({
-    message: '',
-    success: true,
-    open: false,
-  });
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [detailId, setDetailId] = useState(null);
+  const [feedback, setFeedback] = useState({ message: '', success: true, open: false });
 
   const { activeMode } = useContext(CustomizerContext);
   const isDark = activeMode === 'dark';
 
+  const notify = (message, success = true) => setFeedback({ message, success, open: true });
+
   useEffect(() => {
     try {
-      const storedUser =
-        typeof window !== 'undefined'
-          ? JSON.parse(sessionStorage.getItem('user') || 'null')
-          : null;
-
+      const storedUser = typeof window !== 'undefined' ? JSON.parse(sessionStorage.getItem('user') || 'null') : null;
       setToken(storedUser?.data?.adminToken || '');
     } catch (error) {
       console.error('Session parse error:', error);
     }
   }, []);
 
-  useEffect(() => {
-    if (token) {
-      fetchEvents();
-    }
-  }, [token]);
-
-  const fetchEvents = async () => {
+  const load = useCallback(async () => {
+    if (!token) return;
     try {
       setLoading(true);
-
-      const res = await axios.get(`${BASE_URL}/admin/event/showAllEvents`, {
-        headers: { 'x-access-token': token },
-      });
-
-      if (res.data.success) {
-        setEvents(res.data.data || []);
-      }
+      setEvents(await fetchEvents(token));
     } catch (error) {
-      console.error('Failed to fetch events:', error);
-      setFeedback({
-        message: 'Failed to fetch events',
-        success: false,
-        open: true,
-      });
+      notify(errorMessage(error, 'Failed to fetch events'), false);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
 
-  const clearImagePreview = () => {
-    if (imagePreview && imagePreview.startsWith('blob:')) {
-      URL.revokeObjectURL(imagePreview);
-    }
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const resetForm = () => {
-    clearImagePreview();
-    setFormData(initialForm);
-    setImageFile(null);
-    setImagePreview('');
-    setCurrentEvent(null);
-    setErrors({
-      eventName: '',
-      eventDescription: '',
-      eventDate: '',
-      eventTime: '',
-      eventAddress: '',
-      eventStates: '',
-      eventCity: '',
-      eventCountry: '',
-      image: '',
-    });
-  };
-
-  const getDateInputValue = (isoString) => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    const offset = date.getTimezoneOffset();
-    const localDate = new Date(date.getTime() - offset * 60000);
-    return localDate.toISOString().slice(0, 10);
-  };
-
-  const getTimeInputValue = (isoString) => {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    const offset = date.getTimezoneOffset();
-    const localDate = new Date(date.getTime() - offset * 60000);
-    return localDate.toISOString().slice(11, 16);
-  };
-
-  const openCreateDialog = () => {
-    resetForm();
-    setFormMode('create');
-    setFormDialogOpen(true);
-  };
-
-  const openEditDialog = (event) => {
-    resetForm();
-    setFormMode('edit');
-    setCurrentEvent(event);
-
-    setFormData({
-      eventName: event.eventName || '',
-      eventDescription: event.eventDescription || '',
-      eventDate: getDateInputValue(event.eventDateAndTime),
-      eventTime: getTimeInputValue(event.eventDateAndTime),
-      eventAddress: event.eventAddress || '',
-      eventStates: event.eventStates || '',
-      eventCity: event.eventCity || '',
-      eventCountry: event.eventCountry || '',
-    });
-
-    setImagePreview(event.image || '');
-    setFormDialogOpen(true);
-  };
-
-  const closeFormDialog = () => {
-    setFormDialogOpen(false);
-    setSubmitting(false);
-    resetForm();
-  };
-
-  const openViewDialog = (event) => {
-    setViewEvent(event);
-    setViewDialogOpen(true);
-  };
-
-  const closeViewDialog = () => {
-    setViewDialogOpen(false);
-    setViewEvent(null);
-  };
-
-  const handleInputChange = (field, value) => {
-    setFormData((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-
-    if (errors[field]) {
-      setErrors((prev) => ({
-        ...prev,
-        [field]: '',
-      }));
-    }
-  };
-
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0];
-
-    if (!file) {
-      setImageFile(null);
-
-      if (formMode === 'create') {
-        clearImagePreview();
-        setImagePreview('');
-      }
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setErrors((prev) => ({
-        ...prev,
-        image: 'Please select a valid image file',
-      }));
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setErrors((prev) => ({
-        ...prev,
-        image: 'Image must be under 5MB',
-      }));
-      return;
-    }
-
-    clearImagePreview();
-    const previewUrl = URL.createObjectURL(file);
-
-    setImageFile(file);
-    setImagePreview(previewUrl);
-    setErrors((prev) => ({
-      ...prev,
-      image: '',
-    }));
-  };
-
-  const validateForm = () => {
-    const nextErrors = {
-      eventName: '',
-      eventDescription: '',
-      eventDate: '',
-      eventTime: '',
-      eventAddress: '',
-      eventStates: '',
-      eventCity: '',
-      eventCountry: '',
-      image: '',
-    };
-
-    if (!formData.eventName.trim()) {
-      nextErrors.eventName = 'Event name is required';
-    } else if (formData.eventName.trim().length < 3) {
-      nextErrors.eventName = 'Event name must be at least 3 characters';
-    }
-
-    if (!formData.eventDescription.trim()) {
-      nextErrors.eventDescription = 'Description is required';
-    } else if (formData.eventDescription.trim().length < 10) {
-      nextErrors.eventDescription = 'Description must be at least 10 characters';
-    }
-
-    if (!formData.eventDate) {
-      nextErrors.eventDate = 'Date is required';
-    }
-
-    if (!formData.eventTime) {
-      nextErrors.eventTime = 'Time is required';
-    }
-
-    if (!formData.eventAddress.trim()) {
-      nextErrors.eventAddress = 'Address is required';
-    }
-
-    if (!formData.eventStates.trim()) {
-      nextErrors.eventStates = 'State is required';
-    }
-
-    if (!formData.eventCity.trim()) {
-      nextErrors.eventCity = 'City is required';
-    }
-
-    if (!formData.eventCountry.trim()) {
-      nextErrors.eventCountry = 'Country is required';
-    }
-
-    if (formMode === 'create' && !imageFile) {
-      nextErrors.image = 'Image is required';
-    }
-
-    setErrors(nextErrors);
-    return !Object.values(nextErrors).some(Boolean);
-  };
-
-  const buildFormData = () => {
-    const payload = new FormData();
-
-    payload.append('eventName', formData.eventName.trim());
-    payload.append('eventDescription', formData.eventDescription.trim());
-
-    const isoDateTime = new Date(
-      `${formData.eventDate}T${formData.eventTime}`
-    ).toISOString();
-
-    payload.append('eventDateAndTime', isoDateTime);
-    payload.append('eventAddress', formData.eventAddress.trim());
-    payload.append('eventStates', formData.eventStates.trim());
-    payload.append('eventCity', formData.eventCity.trim());
-    payload.append('eventCountry', formData.eventCountry.trim());
-
-    if (imageFile) {
-      payload.append('image', imageFile);
-    }
-
-    return payload;
-  };
-
-  const handleCreateEvent = async (e) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-
-    try {
-      setSubmitting(true);
-
-      await axios.post(`${BASE_URL}/admin/event/createEvent`, buildFormData(), {
-        headers: {
-          'x-access-token': token,
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      closeFormDialog();
-      fetchEvents();
-      setFeedback({
-        message: 'Event created successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (error) {
-      console.error('Failed to create event:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to create event',
-        success: false,
-        open: true,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleUpdateEvent = async (e) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-    if (!currentEvent?.id) return;
-
-    try {
-      setSubmitting(true);
-
-      await axios.put(
-        `${BASE_URL}/admin/event/updateEvent/${currentEvent.id}`,
-        buildFormData(),
-        {
-          headers: {
-            'x-access-token': token,
-            'Content-Type': 'multipart/form-data',
-          },
-        }
+  const filtered = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    return events
+      .filter((event) => matchesStatus(event, statusFilter))
+      .filter(
+        (event) =>
+          !keyword ||
+          [event.eventName, event.venueName, event.eventCity, event.eventCountry, event.eventStates, event.eventAddress].some((v) =>
+            v?.toLowerCase().includes(keyword)
+          )
+      )
+      .sort((a, b) =>
+        statusFilter === 'ACTIVE' || statusFilter === 'NO_PIN'
+          ? new Date(a.eventDateAndTime) - new Date(b.eventDateAndTime)
+          : new Date(b.eventDateAndTime) - new Date(a.eventDateAndTime)
       );
+  }, [events, searchTerm, statusFilter]);
 
-      closeFormDialog();
-      fetchEvents();
-      setFeedback({
-        message: 'Event updated successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (error) {
-      console.error('Failed to update event:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to update event',
-        success: false,
-        open: true,
-      });
-    } finally {
-      setSubmitting(false);
-    }
+  const missingPins = events.filter((e) => matchesStatus(e, 'NO_PIN')).length;
+  const paginated = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  const detailEvent = events.find((e) => e.id === detailId) || null;
+
+  const openCreate = () => {
+    setEditing(null);
+    setFormOpen(true);
   };
 
-  const handleDeleteEvent = async (id) => {
-    if (!confirm('Are you sure you want to delete this event?')) return;
-
-    try {
-      await axios.delete(`${BASE_URL}/admin/event/deleteEvent/${id}`, {
-        headers: { 'x-access-token': token },
-      });
-
-      fetchEvents();
-      setFeedback({
-        message: 'Event deleted successfully!',
-        success: true,
-        open: true,
-      });
-    } catch (error) {
-      console.error('Delete failed:', error);
-      setFeedback({
-        message: error?.response?.data?.message || 'Failed to delete event',
-        success: false,
-        open: true,
-      });
-    }
+  const openEdit = (event) => {
+    setEditing(event);
+    setFormOpen(true);
   };
 
-  const filteredEvents = events.filter((event) => {
-    const keyword = searchTerm.toLowerCase();
-
-    return (
-      event.eventName?.toLowerCase().includes(keyword) ||
-      event.eventCity?.toLowerCase().includes(keyword) ||
-      event.eventCountry?.toLowerCase().includes(keyword) ||
-      event.eventStates?.toLowerCase().includes(keyword) ||
-      event.eventAddress?.toLowerCase().includes(keyword)
+  const handleSave = async (formData) => {
+    const saved = await saveEvent(token, editing?.id, formData);
+    setFormOpen(false);
+    const notified = saved?.notified?.recipients;
+    notify(
+      editing
+        ? `Event updated${notified ? `; ${notified} attendees notified` : ''}.`
+        : 'Event created.'
     );
-  });
-
-  const paginatedEvents = filteredEvents.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  );
-
-  const handleChangePage = (_, newPage) => {
-    setPage(newPage);
+    load();
   };
 
-  const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  };
-
-  const formatDate = (value) => {
-    if (!value) return '-';
-    return new Date(value).toLocaleDateString('en-US');
-  };
-
-  const formatTime = (value) => {
-    if (!value) return '-';
-    return new Date(value).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const border = isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb';
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1150, mx: 'auto' }}>
+    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1250, mx: 'auto' }}>
       <Paper
         sx={{
           p: { xs: 2, md: 3 },
           borderRadius: 3,
           border: '1px solid',
-          borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
+          borderColor: border,
           backgroundColor: isDark ? '#1e1e2f' : '#fff',
           color: isDark ? '#fff' : '#111827',
           boxShadow: isDark ? 'none' : '0 10px 30px rgba(0,0,0,0.06)',
         }}
       >
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          spacing={2}
-          sx={{ mb: 3 }}
-        >
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2} sx={{ mb: 3 }}>
           <Box>
-            <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-              Events
-            </Typography>
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>Events & Activities</Typography>
             <Typography variant="body2" sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}>
-              Manage events, schedules, location, and images.
+              Venues on the map, who&apos;s coming, and messages to attendees.
             </Typography>
           </Box>
-
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={openCreateDialog}
-            sx={{
-              textTransform: 'none',
-              borderRadius: 2,
-              px: 2,
-              py: 1,
-              boxShadow: 'none',
-            }}
-          >
-            Add Event
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate} sx={{ textTransform: 'none', borderRadius: 2, px: 2, py: 1, boxShadow: 'none' }}>
+            Add event
           </Button>
         </Stack>
 
-        <Box sx={{ mb: 2 }}>
+        {missingPins > 0 && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 2 }}
+            action={statusFilter !== 'NO_PIN' && (
+              <Button color="inherit" size="small" onClick={() => { setStatusFilter('NO_PIN'); setPage(0); }}>Show them</Button>
+            )}
+          >
+            {missingPins} upcoming {missingPins === 1 ? 'event has' : 'events have'} no map pin, so {missingPins === 1 ? 'it only shows' : 'they only show'} to people searching the same city.
+          </Alert>
+        )}
+
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
           <TextField
             fullWidth
             size="small"
-            placeholder="Search by name, city, country, state, or address..."
+            placeholder="Search by name, venue, city or country"
             value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setPage(0);
-            }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            }}
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                borderRadius: 2,
-                backgroundColor: isDark ? '#25253a' : '#fafafa',
-              },
-            }}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(0); }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 20 }} /></InputAdornment> }}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2, backgroundColor: isDark ? '#25253a' : '#fafafa' } }}
           />
-        </Box>
+          <TextField select size="small" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }} sx={{ minWidth: 200 }}>
+            {STATUS_FILTERS.map((f) => <MenuItem key={f.value} value={f.value}>{f.label}</MenuItem>)}
+          </TextField>
+        </Stack>
 
-        <TableContainer
-          sx={{
-            border: '1px solid',
-            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-            borderRadius: 2,
-            overflow: 'hidden',
-          }}
-        >
+        <TableContainer sx={{ border: '1px solid', borderColor: border, borderRadius: 2, overflowX: 'auto' }}>
           <Table>
             <TableHead>
               <TableRow sx={{ backgroundColor: isDark ? '#25253a' : '#f8fafc' }}>
-                <TableCell sx={{ fontWeight: 700, width: 80 }}>S.No</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Name</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 110 }}>Image</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Time</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>City</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Country</TableCell>
-                <TableCell sx={{ fontWeight: 700 }}>Address</TableCell>
-                <TableCell sx={{ fontWeight: 700 }} align="right">
-                  Actions
-                </TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Event</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>When (at the event)</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Where</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Attendance</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 700 }} align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
-
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
-                    <CircularProgress size={28} />
-                  </TableCell>
+                  <TableCell colSpan={6} align="center" sx={{ py: 5 }}><CircularProgress size={28} /></TableCell>
                 </TableRow>
-              ) : paginatedEvents.length > 0 ? (
-                paginatedEvents.map((event, index) => (
-                  <TableRow key={event.id} hover>
-                    <TableCell>{page * rowsPerPage + index + 1}</TableCell>
-                    <TableCell>{event.eventName || '-'}</TableCell>
+              ) : paginated.length > 0 ? (
+                paginated.map((event) => (
+                  <TableRow key={event.id} hover sx={{ cursor: 'pointer' }} onClick={() => setDetailId(event.id)}>
                     <TableCell>
-                      {event.image ? (
-                        <Box
-                          component="img"
-                          src={event.image}
-                          alt={event.eventName}
-                          sx={{
-                            width: 72,
-                            height: 48,
-                            objectFit: 'cover',
-                            borderRadius: 1.5,
-                            border: '1px solid',
-                            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                          }}
-                        />
-                      ) : (
-                        '-'
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        {event.image ? (
+                          <Box component="img" src={event.image} alt="" sx={{ width: 64, height: 44, objectFit: 'cover', borderRadius: 1.5, border: '1px solid', borderColor: border, flexShrink: 0 }} />
+                        ) : (
+                          <Box sx={{ width: 64, height: 44, borderRadius: 1.5, bgcolor: 'action.hover', flexShrink: 0 }} />
+                        )}
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{event.eventName}</Typography>
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">{formatAtVenue(event.eventDateAndTime, event.eventTimeZone)}</Typography>
+                      {!event.eventTimeZone && (
+                        <Typography variant="caption" color="text.secondary">In your time zone (no venue zone set)</Typography>
                       )}
                     </TableCell>
-                    <TableCell>{formatDate(event.eventDateAndTime)}</TableCell>
-                    <TableCell>{formatTime(event.eventDateAndTime)}</TableCell>
-                    <TableCell>{event.eventCity || '-'}</TableCell>
-                    <TableCell>{event.eventCountry || '-'}</TableCell>
                     <TableCell>
-                      {event.eventStates}, {event.eventAddress}
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        {event.isOnline && <VideocamIcon fontSize="small" color="action" />}
+                        <Typography variant="body2">{whereLabel(event)}</Typography>
+                        {!event.isOnline && !event.hasPin && (
+                          <Tooltip title="No map pin: only shown to people searching this city">
+                            <Chip size="small" color="warning" variant="outlined" icon={<LocationOffIcon />} label="No pin" />
+                          </Tooltip>
+                        )}
+                      </Stack>
                     </TableCell>
-                    <TableCell align="right">
-                      <IconButton
-                        onClick={() => openViewDialog(event)}
-                        color="primary"
-                        size="small"
-                      >
-                        <VisibilityIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => openEditDialog(event)}
-                        color="secondary"
-                        size="small"
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => handleDeleteEvent(event.id)}
-                        color="error"
-                        size="small"
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
+                    <TableCell>
+                      <Typography variant="body2">
+                        <strong>{event.counts.going}</strong> going · {event.counts.interested} interested
+                      </Typography>
+                      {event.capacity != null && (
+                        <Typography variant="caption" color={event.spotsLeft === 0 ? 'error' : 'text.secondary'}>
+                          {event.spotsLeft === 0 ? 'Full' : `${event.spotsLeft} of ${event.capacity} spots left`}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell><EventStatusChip status={event.status} /></TableCell>
+                    <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                      <IconButton size="small" color="primary" onClick={() => setDetailId(event.id)}><VisibilityIcon fontSize="small" /></IconButton>
+                      {!event.cancelledAt && (
+                        <IconButton size="small" color="secondary" onClick={() => openEdit(event)}><EditIcon fontSize="small" /></IconButton>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
-                    <Typography
-                      variant="body2"
-                      sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}
-                    >
-                      No events found.
-                    </Typography>
+                  <TableCell colSpan={6} align="center" sx={{ py: 5 }}>
+                    <Typography variant="body2" sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}>No events found.</Typography>
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-
           <TablePagination
             component="div"
-            count={filteredEvents.length}
+            count={filtered.length}
             page={page}
-            onPageChange={handleChangePage}
+            onPageChange={(_, p) => setPage(p)}
             rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={handleChangeRowsPerPage}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
             rowsPerPageOptions={[5, 10, 20, 50]}
-            sx={{
-              borderTop: '1px solid',
-              borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-              '& .MuiTablePagination-toolbar': {
-                px: 2,
-              },
-            }}
+            sx={{ borderTop: '1px solid', borderColor: border }}
           />
         </TableContainer>
       </Paper>
 
-      <Dialog open={formDialogOpen} onClose={closeFormDialog} fullWidth maxWidth="sm">
-        <form onSubmit={formMode === 'create' ? handleCreateEvent : handleUpdateEvent}>
-          <DialogTitle sx={{ fontWeight: 700 }}>
-            {formMode === 'create' ? 'Add Event' : 'Edit Event'}
-          </DialogTitle>
+      <EventFormDialog open={formOpen} event={editing} onClose={() => setFormOpen(false)} onSave={handleSave} />
 
-          <DialogContent>
-            <TextField
-              fullWidth
-              autoFocus
-              size="small"
-              label="Event Name"
-              margin="dense"
-              value={formData.eventName}
-              onChange={(e) => handleInputChange('eventName', e.target.value)}
-              error={!!errors.eventName}
-              helperText={errors.eventName || ' '}
-            />
-
-            <TextField
-              fullWidth
-              size="small"
-              multiline
-              minRows={4}
-              label="Description"
-              margin="dense"
-              value={formData.eventDescription}
-              onChange={(e) => handleInputChange('eventDescription', e.target.value)}
-              error={!!errors.eventDescription}
-              helperText={errors.eventDescription || ' '}
-            />
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                fullWidth
-                size="small"
-                type="date"
-                label="Date"
-                margin="dense"
-                value={formData.eventDate}
-                onChange={(e) => handleInputChange('eventDate', e.target.value)}
-                error={!!errors.eventDate}
-                helperText={errors.eventDate || ' '}
-                InputLabelProps={{ shrink: true }}
-              />
-
-              <TextField
-                fullWidth
-                size="small"
-                type="time"
-                label="Time"
-                margin="dense"
-                value={formData.eventTime}
-                onChange={(e) => handleInputChange('eventTime', e.target.value)}
-                error={!!errors.eventTime}
-                helperText={errors.eventTime || ' '}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Stack>
-
-            <TextField
-              fullWidth
-              size="small"
-              label="Address"
-              margin="dense"
-              value={formData.eventAddress}
-              onChange={(e) => handleInputChange('eventAddress', e.target.value)}
-              error={!!errors.eventAddress}
-              helperText={errors.eventAddress || ' '}
-            />
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                fullWidth
-                size="small"
-                label="State"
-                margin="dense"
-                value={formData.eventStates}
-                onChange={(e) => handleInputChange('eventStates', e.target.value)}
-                error={!!errors.eventStates}
-                helperText={errors.eventStates || ' '}
-              />
-
-              <TextField
-                fullWidth
-                size="small"
-                label="City"
-                margin="dense"
-                value={formData.eventCity}
-                onChange={(e) => handleInputChange('eventCity', e.target.value)}
-                error={!!errors.eventCity}
-                helperText={errors.eventCity || ' '}
-              />
-            </Stack>
-
-            <TextField
-              fullWidth
-              size="small"
-              label="Country"
-              margin="dense"
-              value={formData.eventCountry}
-              onChange={(e) => handleInputChange('eventCountry', e.target.value)}
-              error={!!errors.eventCountry}
-              helperText={errors.eventCountry || ' '}
-            />
-
-            <Box sx={{ mt: 1 }}>
-              <Button variant="outlined" component="label" sx={{ textTransform: 'none' }}>
-                {formMode === 'create' ? 'Upload Image' : 'Change Image'}
-                <input hidden type="file" accept="image/*" onChange={handleImageChange} />
-              </Button>
-
-              {errors.image && (
-                <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-                  {errors.image}
-                </Typography>
-              )}
-
-              {imagePreview && (
-                <Box
-                  component="img"
-                  src={imagePreview}
-                  alt="Preview"
-                  sx={{
-                    mt: 2,
-                    width: '100%',
-                    maxHeight: 220,
-                    objectFit: 'cover',
-                    borderRadius: 2,
-                    border: '1px solid',
-                    borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                  }}
-                />
-              )}
-            </Box>
-          </DialogContent>
-
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button
-              onClick={closeFormDialog}
-              color="inherit"
-              disabled={submitting}
-              sx={{ textTransform: 'none' }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={submitting}
-              sx={{ textTransform: 'none', boxShadow: 'none', minWidth: 130 }}
-            >
-              {submitting ? (
-                <CircularProgress size={20} color="inherit" />
-              ) : formMode === 'create' ? (
-                'Add Event'
-              ) : (
-                'Save Changes'
-              )}
-            </Button>
-          </DialogActions>
-        </form>
-      </Dialog>
-
-      <Dialog open={viewDialogOpen} onClose={closeViewDialog} fullWidth maxWidth="md">
-        <DialogTitle sx={{ fontWeight: 700 }}>{viewEvent?.eventName}</DialogTitle>
-
-        <DialogContent>
-          {viewEvent?.image && (
-            <Box
-              component="img"
-              src={viewEvent.image}
-              alt={viewEvent.eventName}
-              sx={{
-                width: '100%',
-                maxHeight: 320,
-                objectFit: 'cover',
-                borderRadius: 2,
-                mb: 2,
-              }}
-            />
-          )}
-
-          <Stack
-            direction="row"
-            spacing={1}
-            sx={{ mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-          >
-            <Typography variant="body2">
-              <strong>Date:</strong> {formatDate(viewEvent?.eventDateAndTime)}
-            </Typography>
-            <Typography variant="body2">
-              <strong>Time:</strong> {formatTime(viewEvent?.eventDateAndTime)}
-            </Typography>
-          </Stack>
-
-          <Typography variant="body1" sx={{ mb: 2, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-            {viewEvent?.eventDescription}
-          </Typography>
-
-          <Stack spacing={1}>
-            <Typography variant="body2">
-              <strong>Country:</strong> {viewEvent?.eventCountry || '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>State:</strong> {viewEvent?.eventStates || '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>City:</strong> {viewEvent?.eventCity || '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>Address:</strong> {viewEvent?.eventAddress || '-'}
-            </Typography>
-          </Stack>
-        </DialogContent>
-
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeViewDialog} sx={{ textTransform: 'none' }}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <EventDetailDialog
+        event={detailEvent}
+        token={token}
+        onClose={() => setDetailId(null)}
+        onEdit={(event) => { setDetailId(null); openEdit(event); }}
+        onChanged={load}
+        onFeedback={notify}
+      />
 
       <Snackbar
         open={feedback.open}
-        autoHideDuration={3000}
-        onClose={() => setFeedback({ ...feedback, open: false })}
+        autoHideDuration={4000}
+        onClose={() => setFeedback((f) => ({ ...f, open: false }))}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
-        <Alert
-          onClose={() => setFeedback({ ...feedback, open: false })}
-          severity={feedback.success ? 'success' : 'error'}
-          variant="filled"
-        >
+        <Alert onClose={() => setFeedback((f) => ({ ...f, open: false }))} severity={feedback.success ? 'success' : 'error'} variant="filled">
           {feedback.message}
         </Alert>
       </Snackbar>

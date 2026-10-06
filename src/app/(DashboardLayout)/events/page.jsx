@@ -6,7 +6,7 @@ import Events from "@/app/components/shared/Events";
 export default function SamplePage() {
 
   return (
-    <PageContainer title="Sample Page" description="this is Sample page">
+    <PageContainer title="Events" description="Manage events and activities">
       <Events/>
     </PageContainer>
   );
