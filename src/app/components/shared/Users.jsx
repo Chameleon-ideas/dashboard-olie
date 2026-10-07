@@ -1,238 +1,227 @@
 'use client';
-import React, { useEffect, useState, useContext } from 'react';
-import axios from 'axios';
-import BASE_URL from '@/utils/api';
+import React, { useCallback, useContext, useEffect, useState } from 'react';
 import PageContainer from '@/app/components/container/PageContainer';
-
 import {
+  Alert,
+  Avatar,
   Box,
-  Paper,
-  Stack,
-  Typography,
-  TextField,
+  Chip,
+  CircularProgress,
   InputAdornment,
+  Paper,
+  Snackbar,
+  Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
-  TableRow,
   TablePagination,
-  CircularProgress,
+  TableRow,
+  Tabs,
+  TextField,
+  Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import { CustomizerContext } from '@/app/context/customizerContext';
+import UserDetailDrawer from '@/app/components/users/UserDetailDrawer';
+import { errorMessage, fetchUsers, formatDate, fullName } from '@/app/components/users/userApi';
+
+const TABS = [
+  { value: 'ALL', label: 'All' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'SUSPENDED', label: 'Suspended' },
+];
 
 const Users = () => {
-  const [allUsers, setAllUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
   const [token, setToken] = useState('');
-
+  const [tab, setTab] = useState('ALL');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [data, setData] = useState({ users: [], total: 0, counts: {} });
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [feedback, setFeedback] = useState({ open: false, message: '', success: true });
 
   const { activeMode } = useContext(CustomizerContext);
   const isDark = activeMode === 'dark';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb';
+
+  const notify = useCallback((message, success = true) => setFeedback({ open: true, message, success }), []);
 
   useEffect(() => {
     try {
-      const storedUser =
-        typeof window !== 'undefined'
-          ? JSON.parse(sessionStorage.getItem('user') || 'null')
-          : null;
-
-      setToken(storedUser?.data?.adminToken || '');
-    } catch (error) {
-      console.error('Session parse error:', error);
+      const stored = JSON.parse(sessionStorage.getItem('user') || 'null');
+      setToken(stored?.data?.adminToken || '');
+    } catch {
+      setToken('');
     }
   }, []);
 
+  // Search on the server, a moment after typing stops.
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(0);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  const load = useCallback(async () => {
     if (!token) return;
+    setLoading(true);
+    try {
+      const result = await fetchUsers(token, {
+        q: search || undefined,
+        status: tab === 'ALL' ? undefined : tab,
+        page: page + 1,
+        limit: rowsPerPage,
+      });
+      setData(result);
+    } catch (e) {
+      notify(errorMessage(e, 'Could not load users'), false);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, search, tab, page, rowsPerPage, notify]);
 
-    const fetchUsers = async () => {
-      setLoading(true);
-      try {
-        const response = await axios.get(`${BASE_URL}/admin/content/showAllUsers`, {
-          headers: {
-            'x-access-token': token,
-          },
-        });
-
-        setAllUsers(response?.data?.data || []);
-      } catch (error) {
-        console.error('Error fetching users:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchUsers();
-  }, [token]);
-
-  const filteredUsers = allUsers.filter((user) => {
-    const keyword = searchTerm.toLowerCase();
-
-    return (
-      user?.firstName?.toLowerCase().includes(keyword) ||
-      user?.lastName?.toLowerCase().includes(keyword) ||
-      user?.email?.toLowerCase().includes(keyword) ||
-      user?.phoneNumber?.toLowerCase().includes(keyword) ||
-      user?.city?.toLowerCase().includes(keyword) ||
-      user?.country?.toLowerCase().includes(keyword)
-    );
-  });
-
-  const paginatedUsers = filteredUsers.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  );
-
-  const handleChangePage = (_, newPage) => {
-    setPage(newPage);
-  };
-
-  const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
-    <PageContainer title="Users" description="List of all users">
+    <PageContainer title="Users" description="Manage app users">
       <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto' }}>
         <Paper
           sx={{
             p: { xs: 2, md: 3 },
             borderRadius: 3,
             border: '1px solid',
-            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
+            borderColor: border,
             backgroundColor: isDark ? '#1e1e2f' : '#fff',
             color: isDark ? '#fff' : '#111827',
             boxShadow: isDark ? 'none' : '0 10px 30px rgba(0,0,0,0.06)',
           }}
         >
-          <Stack
-            direction={{ xs: 'column', sm: 'row' }}
-            justifyContent="space-between"
-            alignItems={{ xs: 'flex-start', sm: 'center' }}
-            spacing={2}
-            sx={{ mb: 3 }}
-          >
-            <Box>
-              <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>
-                Users
-              </Typography>
-              <Typography variant="body2" sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}>
-                View and search all registered users.
-              </Typography>
-            </Box>
-          </Stack>
-
           <Box sx={{ mb: 2 }}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Search by name, email, phone, city, or country..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setPage(0);
-              }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 2,
-                  backgroundColor: isDark ? '#25253a' : '#fafafa',
-                },
-              }}
-            />
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>Users</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Open a user to see their details, edit their profile, suspend them or sign them out. Every change asks for a reason and is kept in their history.
+            </Typography>
           </Box>
 
-          <TableContainer
-            sx={{
-              border: '1px solid',
-              borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-              borderRadius: 2,
-              overflow: 'hidden',
-            }}
-          >
-            <Table sx={{ minWidth: 1000 }}>
+          <Tabs value={tab} onChange={(_, v) => { setTab(v); setPage(0); }} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+            {TABS.map((t) => (
+              <Tab key={t.value} value={t.value} label={`${t.label} (${data.counts?.[t.value] ?? 0})`} sx={{ textTransform: 'none', fontWeight: 600 }} />
+            ))}
+          </Tabs>
+
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Search by name, email, phone, city or country"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            sx={{ mb: 2, '& .MuiOutlinedInput-root': { borderRadius: 2, backgroundColor: isDark ? '#25253a' : '#fafafa' } }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          />
+
+          <TableContainer sx={{ border: '1px solid', borderColor: border, borderRadius: 2 }}>
+            <Table sx={{ minWidth: 900 }}>
               <TableHead>
                 <TableRow sx={{ backgroundColor: isDark ? '#25253a' : '#f8fafc' }}>
-                  <TableCell sx={{ fontWeight: 700, width: 80 }}>S.No</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>First Name</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Last Name</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Email</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>User</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Phone</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Location</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Device</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>City</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Country</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Joined</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
                 </TableRow>
               </TableHead>
-
               <TableBody>
-                {loading ? (
+                {loading && data.users.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9}>
-                      <Box display="flex" justifyContent="center" alignItems="center" py={5}>
-                        <CircularProgress size={28} />
-                      </Box>
-                    </TableCell>
+                    <TableCell colSpan={6} align="center" sx={{ py: 5 }}><CircularProgress size={28} /></TableCell>
                   </TableRow>
-                ) : paginatedUsers.length > 0 ? (
-                  paginatedUsers.map((user, index) => (
-                    <TableRow key={user.id || index} hover>
-                      <TableCell>{page * rowsPerPage + index + 1}</TableCell>
-                      <TableCell>{user.firstName || '-'}</TableCell>
-                      <TableCell>{user.lastName || '-'}</TableCell>
-                      <TableCell>{user.email || '-'}</TableCell>
+                ) : data.users.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} align="center" sx={{ py: 5, color: 'text.secondary' }}>No users found.</TableCell>
+                  </TableRow>
+                ) : (
+                  data.users.map((user) => (
+                    <TableRow
+                      key={user.id}
+                      hover
+                      onClick={() => setSelectedId(user.id)}
+                      sx={{ cursor: 'pointer', opacity: loading ? 0.6 : 1 }}
+                    >
+                      <TableCell>
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                          <Avatar src={user.image || undefined} sx={{ width: 34, height: 34 }}>
+                            {(user.firstName || user.email || '?')[0]?.toUpperCase()}
+                          </Avatar>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>{fullName(user)}</Typography>
+                            <Typography variant="caption" color="text.secondary">{user.email}</Typography>
+                          </Box>
+                        </Stack>
+                      </TableCell>
                       <TableCell>{user.phoneNumber || '-'}</TableCell>
+                      <TableCell>{[user.city, user.country].filter(Boolean).join(', ') || '-'}</TableCell>
                       <TableCell>{user.deviceType || '-'}</TableCell>
-                      <TableCell>{user.city || '-'}</TableCell>
-                      <TableCell>{user.country || '-'}</TableCell>
+                      <TableCell>{formatDate(user.createdAt)}</TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={0.5}>
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            color={user.status === 'SUSPENDED' ? 'error' : 'success'}
+                            label={user.status === 'SUSPENDED' ? 'Suspended' : 'Active'}
+                          />
+                          {!user.isCreatedProfile && <Chip size="small" variant="outlined" label="No profile" />}
+                        </Stack>
+                      </TableCell>
                     </TableRow>
                   ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={9} align="center" sx={{ py: 5 }}>
-                      <Typography
-                        variant="body2"
-                        sx={{ color: isDark ? '#cbd5e1' : '#6b7280' }}
-                      >
-                        No users found.
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
                 )}
               </TableBody>
             </Table>
-
             <TablePagination
               component="div"
-              count={filteredUsers.length}
+              count={data.total}
               page={page}
-              onPageChange={handleChangePage}
+              onPageChange={(_, p) => setPage(p)}
               rowsPerPage={rowsPerPage}
-              onRowsPerPageChange={handleChangeRowsPerPage}
-              rowsPerPageOptions={[5, 10, 20, 50]}
-              sx={{
-                borderTop: '1px solid',
-                borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                '& .MuiTablePagination-toolbar': {
-                  px: 2,
-                },
-              }}
+              onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+              rowsPerPageOptions={[10, 20, 50, 100]}
+              sx={{ borderTop: '1px solid', borderColor: border }}
             />
           </TableContainer>
         </Paper>
       </Box>
+
+      <UserDetailDrawer
+        token={token}
+        userId={selectedId}
+        open={!!selectedId}
+        onClose={() => setSelectedId(null)}
+        onChanged={load}
+        notify={notify}
+      />
+
+      <Snackbar
+        open={feedback.open}
+        autoHideDuration={3500}
+        onClose={() => setFeedback((f) => ({ ...f, open: false }))}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity={feedback.success ? 'success' : 'error'} variant="filled" onClose={() => setFeedback((f) => ({ ...f, open: false }))}>
+          {feedback.message}
+        </Alert>
+      </Snackbar>
     </PageContainer>
   );
 };
