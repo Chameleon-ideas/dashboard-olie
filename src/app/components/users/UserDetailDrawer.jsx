@@ -303,21 +303,6 @@ const UserDetailDrawer = ({ token, userId, open, onClose, onChanged, notify }) =
                 ))}
               </Stack>
             </Section>
-            <Divider sx={{ mb: 3 }} />
-            <Section title="Wallet & subscription">
-              <Info label="Wallet balance" value={String(user.walletBalance)} />
-              {user.subscriptions.length ? (
-                user.subscriptions.map((s) => (
-                  <Typography key={s.id} variant="body2" sx={{ mb: 0.5 }}>
-                    {s.subscriptionPlan?.name || 'Plan'} · {formatDate(s.startDate)} – {formatDate(s.endDate)}
-                    {s.isActive && !s.isCancelled ? ' · active' : s.isCancelled ? ' · cancelled' : ' · ended'}
-                    {s.provider ? ` · ${s.provider}` : ''}
-                  </Typography>
-                ))
-              ) : (
-                <Typography variant="body2" color="text.secondary">No subscriptions</Typography>
-              )}
-            </Section>
             {user.deletionRequests.length > 0 && (
               <Section title="Account deletion requests">
                 {user.deletionRequests.map((r) => (
