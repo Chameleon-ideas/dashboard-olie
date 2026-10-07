@@ -17,7 +17,8 @@ import {
   IconCategory,
     IconFileText, 
     IconMessage,
-  IconCalendarCheck
+  IconCalendarCheck,
+  IconFlag
 
 } from '@tabler/icons-react';
 
@@ -38,6 +39,12 @@ const Menuitems = [
     title: 'Users',
     icon: IconUsers,
     href: '/users',
+  },
+  {
+    id: uniqueId(),
+    title: 'Reports',
+    icon: IconFlag,
+    href: '/reports',
   },
    {
     id: uniqueId(),
