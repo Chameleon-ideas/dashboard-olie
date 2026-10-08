@@ -34,7 +34,65 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import FlagIcon from '@mui/icons-material/Flag';
+import PlayCircleIcon from '@mui/icons-material/PlayCircle';
+import PollIcon from '@mui/icons-material/Poll';
 import { CustomizerContext } from '@/app/context/customizerContext';
+
+// What kind of post it is, for the chip under the title.
+const POST_KIND = {
+  VIDEO: { label: 'Video', color: 'secondary' },
+  POLL: { label: 'Poll', color: 'info' },
+  IMAGE: { label: 'Images', color: 'primary' },
+  TEXT: { label: 'Text', color: 'default' },
+};
+const postKind = (post) => (post.type === 'ADMIN_POST' ? null : POST_KIND[post.postType] || (post.videoUrl ? POST_KIND.VIDEO : null));
+
+// The small preview in the table: the cover image, a frame of the video, or a poll icon.
+const MediaThumb = ({ post, border }) => {
+  const box = { width: 72, height: 48, borderRadius: 1.5, border: '1px solid', borderColor: border, overflow: 'hidden', position: 'relative', bgcolor: '#0f172a' };
+  const play = (
+    <PlayCircleIcon sx={{ position: 'absolute', inset: 0, m: 'auto', color: '#fff', fontSize: 24, filter: 'drop-shadow(0 1px 2px rgba(0,0,0,.6))' }} />
+  );
+  if (post.image) {
+    return (
+      <Box sx={{ ...box, bgcolor: 'transparent' }}>
+        <Box component="img" src={post.image} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        {post.videoUrl && play}
+      </Box>
+    );
+  }
+  if (post.videoUrl) {
+    // No thumbnail (older posts): the browser shows the first frame.
+    return (
+      <Box sx={box}>
+        <Box component="video" src={`${post.videoUrl}#t=0.5`} preload="metadata" muted playsInline sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        {play}
+      </Box>
+    );
+  }
+  if (post.poll) return <PollIcon color="info" />;
+  return '-';
+};
+
+// Poll answers with how many chose each.
+const PollResults = ({ poll, isDark }) => (
+  <Box sx={{ mb: 2, p: 2, borderRadius: 2, border: '1px solid', borderColor: isDark ? 'rgba(255,255,255,0.1)' : '#e5e7eb' }}>
+    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>
+      {poll.question || 'Poll'} · {poll.totalVotes} {poll.totalVotes === 1 ? 'vote' : 'votes'}
+    </Typography>
+    {(poll.results || []).map((o) => (
+      <Box key={o.id} sx={{ mb: 1 }}>
+        <Stack direction="row" justifyContent="space-between">
+          <Typography variant="body2">{o.text}</Typography>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{o.percentage}% · {o.votes}</Typography>
+        </Stack>
+        <Box sx={{ height: 6, borderRadius: 3, bgcolor: isDark ? 'rgba(255,255,255,0.08)' : '#f1f5f9', mt: 0.5 }}>
+          <Box sx={{ width: `${o.percentage}%`, height: '100%', borderRadius: 3, bgcolor: 'info.main' }} />
+        </Box>
+      </Box>
+    ))}
+  </Box>
+);
 
 const Posts = () => {
   const [interests, setInterests] = useState([]);
@@ -45,7 +103,7 @@ const Posts = () => {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
 
   const [formDialogOpen, setFormDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
@@ -495,7 +553,7 @@ const Posts = () => {
               <TableRow sx={{ backgroundColor: isDark ? '#25253a' : '#f8fafc' }}>
                 <TableCell sx={{ fontWeight: 700, width: 80 }}>S.No</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Title</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 110 }}>Image</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 110 }}>Media</TableCell>
                 <TableCell sx={{ fontWeight: 700 }}>Interest</TableCell>
                 <TableCell sx={{ fontWeight: 700, width: 120 }}>Status</TableCell>
                 <TableCell sx={{ fontWeight: 700 }} align="right">
@@ -509,25 +567,16 @@ const Posts = () => {
                 paginatedPosts.map((post, index) => (
                   <TableRow key={post.id} hover>
                     <TableCell>{page * rowsPerPage + index + 1}</TableCell>
-                    <TableCell>{post.title}</TableCell>
                     <TableCell>
-                      {post.image ? (
-                        <Box
-                          component="img"
-                          src={post.image}
-                          alt={post.title}
-                          sx={{
-                            width: 72,
-                            height: 48,
-                            objectFit: 'cover',
-                            borderRadius: 1.5,
-                            border: '1px solid',
-                            borderColor: isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb',
-                          }}
-                        />
-                      ) : (
-                        '-'
+                      {post.title}
+                      {postKind(post) && (
+                        <Box sx={{ mt: 0.5 }}>
+                          <Chip size="small" variant="outlined" color={postKind(post).color} label={postKind(post).label} />
+                        </Box>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <MediaThumb post={post} border={isDark ? 'rgba(255,255,255,0.08)' : '#e5e7eb'} />
                     </TableCell>
                     <TableCell>{post.category?.name || '-'}</TableCell>
                     <TableCell>
@@ -738,7 +787,28 @@ const Posts = () => {
         <DialogTitle sx={{ fontWeight: 700 }}>{viewPost?.title}</DialogTitle>
 
         <DialogContent>
-          {viewPost?.image && (
+          {viewPost?.videoUrl && (
+            <Box
+              component="video"
+              src={viewPost.videoUrl}
+              poster={viewPost.image || undefined}
+              controls
+              playsInline
+              preload="metadata"
+              sx={{ width: '100%', maxHeight: 420, borderRadius: 2, mb: 2, bgcolor: '#000' }}
+            />
+          )}
+          {viewPost?.poll && <PollResults poll={viewPost.poll} isDark={isDark} />}
+          {viewPost?.images?.length > 1 && (
+            <Stack direction="row" spacing={1} sx={{ mb: 2, overflowX: 'auto' }}>
+              {viewPost.images.map((src) => (
+                <Box key={src} component="a" href={src} target="_blank" rel="noreferrer" sx={{ flexShrink: 0 }}>
+                  <Box component="img" src={src} alt="" sx={{ width: 140, height: 100, objectFit: 'cover', borderRadius: 1.5, display: 'block' }} />
+                </Box>
+              ))}
+            </Stack>
+          )}
+          {viewPost?.image && !viewPost?.videoUrl && !(viewPost?.images?.length > 1) && (
             <Box
               component="img"
               src={viewPost.image}
@@ -759,6 +829,11 @@ const Posts = () => {
               label={`Interest: ${viewPost?.category?.name || '-'}`}
               variant="outlined"
             />
+            {viewPost && postKind(viewPost) && (
+              <Chip size="small" variant="outlined" color={postKind(viewPost).color} label={postKind(viewPost).label} />
+            )}
+            {viewPost?.author?.name && <Chip size="small" variant="outlined" label={`By ${viewPost.author.name}`} />}
+            {viewPost?.hidden && <Chip size="small" label="Hidden" />}
             {viewPost?.isReport ? (
               <Chip
                 size="small"
