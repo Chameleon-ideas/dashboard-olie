@@ -20,6 +20,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckIcon from '@mui/icons-material/Check';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ReasonDialog from '@/app/components/users/ReasonDialog';
 import UserDetailDrawer from '@/app/components/users/UserDetailDrawer';
 import {
@@ -48,6 +49,7 @@ const SUCCESS = {
   WARN: 'Warning sent. The reports are resolved.',
   SUSPEND: 'User suspended. The reports are resolved.',
   CLOSE: 'Case closed with no action',
+  DELETE: 'Group deleted. Its members were told and the reports are resolved.',
 };
 
 const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) => {
@@ -55,7 +57,7 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState(null); // 'HIDE' | 'UNHIDE' | 'WARN' | 'SUSPEND' | 'CLOSE'
+  const [pending, setPending] = useState(null); // 'HIDE' | 'UNHIDE' | 'WARN' | 'SUSPEND' | 'CLOSE' | 'DELETE'
   const [userOpen, setUserOpen] = useState(false);
 
   const targetType = target?.targetType;
@@ -104,6 +106,8 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
   const suspended = owner?.status === 'SUSPENDED';
   const isUser = targetType === 'USER';
   const isOpen = item?.status === 'OPEN';
+  const isGroup = targetType === 'GROUP';
+  const deleted = Boolean(item?.deleted);
   const typeLabel = TARGET_LABEL[targetType] || targetType;
   const thing = isUser ? 'this profile' : `this ${typeLabel?.toLowerCase()}`;
   const preview = item?.preview || {};
@@ -154,6 +158,14 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
       confirmColor: 'success',
       reasonLabel: 'Why is no action needed?',
     },
+    DELETE: {
+      title: `Delete "${preview.title || 'this group'}"?`,
+      message:
+        "It disappears for everyone in the app straight away and can't be shown again from here. Everyone in the group gets a notification that it was removed for going against our community guidelines. All open reports on it are marked resolved.",
+      confirmLabel: 'Delete group',
+      confirmColor: 'error',
+      reasonLabel: 'Why are you deleting it? (admins only)',
+    },
   };
 
   const btn = { textTransform: 'none' };
@@ -168,7 +180,11 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
               {item && (
                 <Chip size="small" variant="outlined" color={isOpen ? 'warning' : 'success'} label={isOpen ? 'Open' : 'Resolved'} />
               )}
-              {item?.hidden && <Chip size="small" color="default" icon={<VisibilityOffIcon />} label="Hidden" />}
+              {deleted ? (
+                <Chip size="small" color="error" variant="outlined" icon={<DeleteOutlineIcon />} label="Deleted" />
+              ) : (
+                item?.hidden && <Chip size="small" color="default" icon={<VisibilityOffIcon />} label="Hidden" />
+              )}
             </Stack>
             {item && (
               <Typography variant="body2" color="text.secondary">
@@ -182,7 +198,7 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
         {item && (
           <>
             <Stack direction="row" spacing={1} sx={{ mt: 2 }} flexWrap="wrap" useFlexGap>
-              {!isUser &&
+              {!isUser && !deleted &&
                 (item.hidden ? (
                   <Button size="small" variant="outlined" startIcon={<VisibilityIcon />} onClick={() => setPending('UNHIDE')} sx={btn}>
                     Show again
@@ -192,6 +208,11 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
                     Hide content
                   </Button>
                 ))}
+              {isGroup && !deleted && (
+                <Button size="small" variant="outlined" color="error" startIcon={<DeleteOutlineIcon />} onClick={() => setPending('DELETE')} sx={btn}>
+                  Delete group
+                </Button>
+              )}
               <Button
                 size="small"
                 variant="outlined"
@@ -228,6 +249,11 @@ const ReportCaseDrawer = ({ token, target, open, onClose, onChanged, notify }) =
             </Stack>
             {ownerBlocked && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{ownerBlocked}</Typography>
+            )}
+            {deleted && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                This group was deleted. It can't be shown again from here.
+              </Typography>
             )}
             {!isOpen && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: ownerBlocked ? 0.25 : 1 }}>

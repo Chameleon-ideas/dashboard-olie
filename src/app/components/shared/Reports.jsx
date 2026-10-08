@@ -94,7 +94,11 @@ const Preview = ({ item }) => {
           <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>{context}</Typography>
         )}
       </Box>
-      {item.hidden && <Chip size="small" icon={<VisibilityOffIcon />} label="Hidden" sx={{ flexShrink: 0 }} />}
+      {item.deleted ? (
+        <Chip size="small" color="error" variant="outlined" label="Deleted" sx={{ flexShrink: 0 }} />
+      ) : (
+        item.hidden && <Chip size="small" icon={<VisibilityOffIcon />} label="Hidden" sx={{ flexShrink: 0 }} />
+      )}
     </Stack>
   );
 };

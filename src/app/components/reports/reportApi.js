@@ -14,7 +14,7 @@ export const fetchCase = async (token, targetType, targetId) => {
   return res.data?.data;
 };
 
-// action: 'HIDE' | 'UNHIDE' | 'WARN' | 'SUSPEND' | 'CLOSE'. `message` is only for WARN (the text the user sees).
+// action: 'HIDE' | 'UNHIDE' | 'WARN' | 'SUSPEND' | 'CLOSE' | 'DELETE' (groups only). `message` is only for WARN (the text the user sees).
 export const caseAction = async (token, targetType, targetId, { action, reason, message }) => {
   const res = await axios.post(
     `${BASE_URL}/admin/report/cases/${targetType}/${encodeURIComponent(targetId)}/action`,
@@ -67,9 +67,10 @@ export const ACTION_LABEL = {
   WARN: 'Warned user',
   SUSPEND: 'Suspended user',
   CLOSE: 'Closed, no action',
+  DELETE: 'Deleted group',
 };
 
-export const ACTION_COLOR = { HIDE: 'warning', UNHIDE: 'info', WARN: 'warning', SUSPEND: 'error', CLOSE: 'success' };
+export const ACTION_COLOR = { HIDE: 'warning', UNHIDE: 'info', WARN: 'warning', SUSPEND: 'error', CLOSE: 'success', DELETE: 'error' };
 
 // Reasons sorted by how often they were picked, most first.
 export const sortedReasons = (reasons) =>
