@@ -64,6 +64,9 @@ const TypeChip = ({ type }) => <Chip size="small" color={TYPE_COLOR[type] || 'de
 const Preview = ({ item }) => {
   const p = item.preview || {};
   const main = p.title || p.text || 'No preview available';
+  // Some types (help requests) only have a generic title, so show the text under it.
+  const sub = p.title && p.text ? p.text : null;
+  const context = p.context && p.context !== p.title ? p.context : null;
   return (
     <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
       {p.image ? (
@@ -84,8 +87,11 @@ const Preview = ({ item }) => {
         >
           {main}
         </Typography>
-        {p.context && (
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>{p.context}</Typography>
+        {sub && (
+          <Typography variant="body2" color="text.secondary" noWrap sx={{ display: 'block' }}>{sub}</Typography>
+        )}
+        {context && (
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>{context}</Typography>
         )}
       </Box>
       {item.hidden && <Chip size="small" icon={<VisibilityOffIcon />} label="Hidden" sx={{ flexShrink: 0 }} />}
